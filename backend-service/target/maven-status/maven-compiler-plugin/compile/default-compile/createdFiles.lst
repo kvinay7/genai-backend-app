@@ -1,0 +1,12 @@
+com/example/backend/repositories/ChatRepository.class
+com/example/backend/models/ChatMessage.class
+com/example/backend/BackendServiceApplication.class
+com/example/backend/services/ChatService.class
+com/example/backend/dto/InferResponse.class
+com/example/backend/config/CorsConfig.class
+com/example/backend/exceptions/GlobalExceptionHandler.class
+com/example/backend/filters/AuthFilter.class
+com/example/backend/config/RestConfig.class
+com/example/backend/services/LLMClient.class
+com/example/backend/controllers/ChatController.class
+com/example/backend/filters/LoggingFilter.class

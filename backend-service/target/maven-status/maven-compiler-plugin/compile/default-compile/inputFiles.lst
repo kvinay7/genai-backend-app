@@ -1,0 +1,12 @@
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/filters/LoggingFilter.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/config/RestConfig.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/BackendServiceApplication.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/dto/InferResponse.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/models/ChatMessage.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/services/ChatService.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/exceptions/GlobalExceptionHandler.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/repositories/ChatRepository.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/services/LLMClient.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/filters/AuthFilter.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/config/CorsConfig.java
+/workspaces/genai-backend-app/backend-service/src/main/java/com/example/backend/controllers/ChatController.java
