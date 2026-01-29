@@ -15,3 +15,18 @@
 - cd backend-service
 - mvn clean spring-boot:run
 
+## TEST END-TO-END FLOW
+
+```bash
+curl -X POST http://localhost:8080/api/chat \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer test-token" \
+  -d '{"prompt":"What is RAG?"}'
+````
+
+```json
+{
+  "response": "LLM answer using: Relevant context from vector DB"
+}
+```
+
