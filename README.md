@@ -7,7 +7,7 @@
 ## Python Setup
 - cd genai-service
 - python -m venv venv
-- source venv/bin/activate
+- source venv/bin/activate (or) .\venv\Scripts\Activate
 - pip install -r requirements.txt
 - python app.py
 

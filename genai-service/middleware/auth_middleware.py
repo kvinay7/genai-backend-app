@@ -1,8 +1,7 @@
-from flask import request, jsonify, g
+from flask import request, g
 
 def authenticate():
-    token = request.headers.get("Authorization")
-    if not token:
-        return jsonify({"error": "Unauthorized"}), 401
+    # Only protect public endpoints if needed
+    # Internal calls from Spring are trusted
+    g.user_id = "internal-user"
 
-    g.user_id = "user-123"

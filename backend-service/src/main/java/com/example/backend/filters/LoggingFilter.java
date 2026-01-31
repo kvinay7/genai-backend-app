@@ -2,6 +2,7 @@ package com.example.backend.filters;
 
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
+import org.springframework.core.annotation.Order;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -10,6 +11,7 @@ import java.io.IOException;
 import java.util.UUID;
 
 @Component
+@Order(1)
 public class LoggingFilter extends OncePerRequestFilter {
 
     @Override

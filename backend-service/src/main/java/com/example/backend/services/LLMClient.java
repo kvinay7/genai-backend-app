@@ -15,28 +15,19 @@ public class LLMClient {
     @Value("${openai.service-url}")
     private String baseUrl;
 
-    private final RestTemplate restTemplate;
-
     @Autowired
-    public LLMClient(RestTemplate restTemplate) {
-        this.restTemplate = restTemplate;
-    }
+    private RestTemplate restTemplate;
 
     public String infer(String prompt) {
         Map<String, String> body = Map.of("prompt", prompt);
 
-        ResponseEntity<InferResponse> res =
-                restTemplate.postForEntity(
-                        baseUrl + "/infer",
-                        body,
-                        InferResponse.class
-                );
+        ResponseEntity<Map> res =
+            restTemplate.postForEntity(
+                baseUrl + "/infer",
+                body,
+                Map.class
+            );
 
-        InferResponse response = res.getBody();
-        if (response == null || response.response() == null) {
-            throw new IllegalStateException("Empty or invalid inference response");
-        }
-
-        return response.response();
+        return res.getBody().get("response").toString();
     }
 }
