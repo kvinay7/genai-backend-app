@@ -1,51 +1,58 @@
 package com.example.backend.models;
 
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.*;
 import java.time.Instant;
 
 @Entity
+@Table(name = "chat_messages")
 public class ChatMessage {
-
     @Id
-    @GeneratedValue
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(nullable = false)
     private String userId;
-    private String message;
+
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String prompt;
+
+    @Column(columnDefinition = "TEXT")
+    private String response;
+
+    @Column(nullable = false)
     private Instant createdAt;
 
-    // Getters and Setters
-    public Long getId() {
-        return id;
+    @Column
+    private Instant updatedAt;
+
+    // Constructors
+    public ChatMessage() {
+        this.createdAt = Instant.now();
     }
 
-    public void setId(Long id) {
-        this.id = id;
-    }
-
-    public String getUserId() {
-        return userId;
-    }
-
-    public void setUserId(String userId) {
+    public ChatMessage(String userId, String prompt, String response) {
         this.userId = userId;
+        this.prompt = prompt;
+        this.response = response;
+        this.createdAt = Instant.now();
     }
 
-    public String getMessage() {
-        return message;
-    }
+    // Getters and Setters
+    public Long getId() { return id; }
+    public void setId(Long id) { this.id = id; }
 
-    public void setMessage(String message) {
-        this.message = message;
-    }
+    public String getUserId() { return userId; }
+    public void setUserId(String userId) { this.userId = userId; }
 
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
+    public String getPrompt() { return prompt; }
+    public void setPrompt(String prompt) { this.prompt = prompt; }
 
-    public void setCreatedAt(Instant createdAt) {
-        this.createdAt = createdAt;
-    }
+    public String getResponse() { return response; }
+    public void setResponse(String response) { this.response = response; }
+
+    public Instant getCreatedAt() { return createdAt; }
+    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+
+    public Instant getUpdatedAt() { return updatedAt; }
+    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
 }
