@@ -33,6 +33,8 @@ public class LLMClient {
 
     @Async
     public CompletableFuture<String> inferAsync(String prompt) {
+        // IO-bound: waiting for external LLM API or genai-service
+        // CPU is free to handle other requests
         return CompletableFuture.completedFuture(infer(prompt));
     }
 }
