@@ -1,7 +1,10 @@
 package com.example.backend.controllers;
 
+import com.example.backend.dto.CreateChatRequest;
+import com.example.backend.dto.UpdateChatRequest;
 import com.example.backend.models.ChatMessage;
 import com.example.backend.services.ChatService;
+import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -9,12 +12,9 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import java.time.Instant;
-import java.util.Map;
 
 @RestController
 @RequestMapping("/api/chats")
-@CrossOrigin(origins = "*")
 public class ChatController {
     @Autowired
     private ChatService chatService;
@@ -22,9 +22,8 @@ public class ChatController {
     @PostMapping
     public ResponseEntity<ChatMessage> createChat(
             @RequestParam String userId,
-            @RequestBody Map<String, String> payload) {
-        String prompt = payload.get("prompt");
-        ChatMessage response = chatService.createChat(userId, prompt);
+            @Valid @RequestBody CreateChatRequest request) {
+        ChatMessage response = chatService.createChat(userId, request.prompt());
         return ResponseEntity.ok(response);
     }
 
@@ -52,30 +51,9 @@ public class ChatController {
     @PutMapping("/{id}")
     public ResponseEntity<ChatMessage> updateChat(
             @PathVariable Long id,
-            @RequestBody Map<String, String> payload) {
-        String prompt = payload.get("prompt");
-        String response = payload.get("response");
-        ChatMessage updated = chatService.updateChat(id, prompt, response);
+            @Valid @RequestBody UpdateChatRequest request) {
+        ChatMessage updated = chatService.updateChat(id, request.prompt(), request.response());
         return updated != null ? ResponseEntity.ok(updated) : ResponseEntity.notFound().build();
-    }
-
-    @PatchMapping("/{id}")
-    public ResponseEntity<ChatMessage> patchChat(
-            @PathVariable Long id,
-            @RequestBody Map<String, String> payload) {
-        ChatMessage existing = chatService.getChatById(id);
-        if (existing == null) {
-            return ResponseEntity.notFound().build();
-        }
-        if (payload.containsKey("prompt")) {
-            existing.setPrompt(payload.get("prompt"));
-        }
-        if (payload.containsKey("response")) {
-            existing.setResponse(payload.get("response"));
-        }
-        existing.setUpdatedAt(Instant.now());
-        ChatMessage updated = chatService.updateChat(id, existing.getPrompt(), existing.getResponse());
-        return ResponseEntity.ok(updated);
     }
 
     @DeleteMapping("/{id}")

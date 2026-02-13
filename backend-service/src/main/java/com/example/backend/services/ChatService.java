@@ -19,7 +19,7 @@ public class ChatService {
     private LLMClient llmClient;
 
     public ChatMessage createChat(String userId, String prompt) {
-        String response = llmClient.call(prompt);
+        String response = llmClient.infer(prompt);
         ChatMessage message = new ChatMessage(userId, prompt, response);
         message.setCreatedAt(Instant.now());
         return chatRepository.save(message);
@@ -48,6 +48,7 @@ public class ChatService {
     }
 
     public void deleteChatsByUserId(String userId) {
-        chatRepository.deleteAll(ChatSpecifications.byUserId(userId));
+        var chatsToDelete = chatRepository.findAll(ChatSpecifications.byUserId(userId));
+        chatRepository.deleteAll(chatsToDelete);
     }
 }
