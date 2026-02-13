@@ -17,6 +17,16 @@ Spring Boot REST API for the GenAI Chat Application.
 - Lombok (optional)
 
 ## Architecture
+
+- **Process & Thread Management**:
+  - The application runs as **two separate OS processes**:
+    - `backend-service` → One JVM process (Spring Boot)
+    - `genai-service` → One Python process (Flask/Gunicorn)
+
+  - Each process contains **multiple threads**:
+    - Spring Boot uses Tomcat’s default thread pool (200 threads) to handle concurrent HTTP requests.
+    - Long-running LLM inference is offloaded to async threads so the main HTTP thread is never blocked.
+
 - **Layered Architecture**:
   - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes)
   - Services → Pure business logic, orchestration, HTTP-agnostic
