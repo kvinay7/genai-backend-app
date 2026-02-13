@@ -30,4 +30,9 @@ public class LLMClient {
 
         return res.getBody().get("response").toString();
     }
+
+    @Async
+    public CompletableFuture<String> inferAsync(String prompt) {
+        return CompletableFuture.completedFuture(infer(prompt));
+    }
 }
