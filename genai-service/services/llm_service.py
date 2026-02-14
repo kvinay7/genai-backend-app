@@ -1,11 +1,9 @@
-from handlers.llm_handler import LLMHandler
 from repositories.chat_repository import ChatRepository
 from repositories.vector_repository import search_context
 from typing import Dict, Any
 
 class LLMService:
     def __init__(self):
-        self.handler = LLMHandler()
         self.chat_repo = ChatRepository()
 
     def process_query(self, user_id: str, prompt: str) -> Dict[str, Any]:

@@ -21,9 +21,8 @@ public class ChatController {
 
     @PostMapping
     public ResponseEntity<ChatMessage> createChat(
-            @RequestParam String userId,
             @Valid @RequestBody CreateChatRequest request) {
-        ChatMessage response = chatService.createChat(userId, request.prompt());
+        ChatMessage response = chatService.createChat(request.userId(), request.prompt());
         return ResponseEntity.ok(response);
     }
 
