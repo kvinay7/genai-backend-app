@@ -31,7 +31,7 @@ Spring Boot REST API for the GenAI Chat Application.
   - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes)
   - Services → Pure business logic, orchestration, HTTP-agnostic
   - Repositories → Data access only, no business logic
-  - Global Exception Handler
+  - Global Exception Handler for uncaught exceptions.
   - Filters/Middlewares → Cross-cutting concerns executed before/after handlers (logging & authentication)
 
 - **Database Design**
@@ -66,7 +66,7 @@ curl -X POST http://localhost:8080/api/chats \
   }'
 ```
 
-**Response (200 OK):**
+**Response (201 Created):**
 ```json
 {
   "id": 1,
