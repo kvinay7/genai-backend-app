@@ -10,22 +10,11 @@ Spring Boot REST API for the GenAI Chat Application.
 - Return structured responses with proper HTTP status codes
 
 ## Tech Stack
-- Java 17 + Spring Boot 3
+- Java + Spring Boot
 - Spring Data JPA + Hibernate
-- H2 Database (development) / PostgreSQL (production)
-- Maven
-- Lombok (optional)
+- H2 Database (dev) / PostgreSQL (prod)
 
 ## Architecture
-
-- **Process & Thread Management**:
-  - The application runs as **two separate OS processes**:
-    - `backend-service` → One JVM process (Spring Boot)
-    - `genai-service` → One Python process (Flask/Gunicorn)
-
-  - Each process contains **multiple threads**:
-    - Spring Boot uses Tomcat’s default thread pool (200 threads) to handle concurrent HTTP requests.
-    - Long-running LLM inference is offloaded to async threads so the main HTTP thread is never blocked.
 
 - **Layered Architecture**:
   - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes)
@@ -41,6 +30,15 @@ Spring Boot REST API for the GenAI Chat Application.
   - Foreign Key: `user_id`
   - Composite Index: `(user_id, created_at DESC)` for fast chat history retrieval
 
+- **Process & Thread Management**:
+  - The application runs as **two separate OS processes**:
+    - `backend-service` → One JVM process (Spring Boot)
+    - `genai-service` → One Python process (Flask/Gunicorn)
+
+  - Each process contains **multiple threads**:
+    - Spring Boot uses Tomcat’s default thread pool (200 threads) to handle concurrent HTTP requests.
+    - Long-running LLM inference is offloaded to async threads so the main HTTP thread is never blocked.
+      
 ## Setup & Run
 ```bash
 
