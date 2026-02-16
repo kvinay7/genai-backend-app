@@ -1,13 +1,20 @@
 # Backend Service
-
-Spring Boot REST API for the GenAI Chat Application.
+A production-oriented backend service demonstrating HTTP fundamentals, REST design, layered architecture, concurrency handling, and distributed system best practices.
 
 ## Purpose
 - Expose RESTful endpoints for chat CRUD operations
-- Handle authentication and authorization
-- Persist chat history
+- Enforces stateless authentication via Authorization header
+- Persist chat history (centralized source of truth)
 - Orchestrate calls to GenAI service for LLM responses
 - Return structured responses with proper HTTP status codes
+
+## Responsibilities
+  - Reliability: Global exception handling, proper status codes
+  - Scalability: Stateless APIs, pagination, connection pooling
+  - Fault Tolerance: Graceful error responses for downstream failures
+  - Security Boundary: Authentication via headers (never exposing secrets to frontend)
+  - State Centralization: Persistent chat history in database
+  - Compute Offloading: LLM inference executed in separate Python service
 
 ## Tech Stack
 - Java + Spring Boot
@@ -15,13 +22,13 @@ Spring Boot REST API for the GenAI Chat Application.
 - H2 Database (dev) / PostgreSQL (prod)
 
 ## Architecture
-
 - **Layered Architecture**:
-  - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes)
-  - Services → Pure business logic, orchestration, HTTP-agnostic
+  - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes, pagination and sorting)
+  - Services → Pure business logic, orchestration of LLM service calls, HTTP-agnostic
   - Repositories → Data access only, no business logic
-  - Global Exception Handler for uncaught exceptions.
+  - Global Exception Handler for uncaught exceptions (Prevents leaking internal errors).
   - Filters/Middlewares → Cross-cutting concerns executed before/after handlers (logging & authentication)
+  - Config → CORS & Security
 
 - **Database Design**
   - Main entity: `ChatMessage`
