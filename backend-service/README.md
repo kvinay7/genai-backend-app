@@ -46,7 +46,9 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
   - Each process contains **multiple threads**:
     - Spring Boot uses Tomcat’s default thread pool (200 threads) to handle concurrent HTTP requests.
     - Long-running LLM inference is offloaded to async threads so the main HTTP thread is never blocked.
-      
+
+---
+
 ## Setup & Run
 ```bash
 
@@ -56,6 +58,47 @@ Maven ≥ 3.8 (mvn --version)
 cd backend-service
 mvn clean spring-boot:run
 ```
+
+---
+
+## Request Processing Flow
+Every API request follows a predictable, production-grade pipeline for reliability, observability, and security.
+
+### Step-by-Step Flow
+1. **Client Request**  
+   - HTTP request arrives with `Authorization: Bearer <token>` header (required for all endpoints except preflight).
+
+2. **CORS Handling** (Cross-Origin Requests)  
+   - Configured in `CorsConfig.java` (allowed origins from `application.yml`, methods/headers, maxAge 86400).
+   - Preflight `OPTIONS` requests are allowed automatically.
+
+3. **Filter Chain Execution**  
+   - **LoggingFilter** (`@Order(1)`):  
+     Generates unique `requestId` (UUID) → Sets in MDC (for structured logs) and request attribute → Logs entry (e.g., `[uuid-123] POST /api/chats`).
+   - **AuthFilter** (`@Order(2)`):  
+     Validates `Authorization` header → If missing/invalid → Returns 401 JSON + warn log → Short-circuits.  
+     If valid → Extracts/mocks `userId` → Sets as request attribute → Proceeds.
+
+4. **Controller** (`ChatController.java`)  
+   - Extracts `userId` from request attribute.
+   - Validates body (`@Valid`).
+   - Calls service layer.
+
+5. **Service** (`ChatService.java`)  
+   - Business logic: Save prompt → Orchestrate LLM call → Update response → Persist.
+
+6. **External/DB Calls**  
+   - Repository saves to DB.
+   - `LLMClient` calls GenAI service (async/offloaded).
+
+7. **Response**  
+   - Success: 200/201/204 with JSON.
+   - Error: Handled by `GlobalExceptionHandler.java` (includes `requestId` in 500 responses).
+
+8. **Cleanup**  
+   - LoggingFilter clears MDC.
+
+---
 
 ## API Endpoints
 
