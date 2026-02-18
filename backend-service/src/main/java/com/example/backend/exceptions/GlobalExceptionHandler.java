@@ -13,8 +13,7 @@ import java.util.Map;
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
-    private static final Logger log =
-            LoggerFactory.getLogger(GlobalExceptionHandler.class);
+    private static final Logger logger = LoggerFactory.getLogger(GlobalExceptionHandler.class);
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, String>> handle(
@@ -23,12 +22,7 @@ public class GlobalExceptionHandler {
     ) {
         String requestId = (String) request.getAttribute("requestId");
 
-        log.error(
-            "Unhandled exception | requestId={} | path={}",
-            requestId,
-            request.getRequestURI(),
-            ex
-        );
+        logger.error("Unhandled exception | requestId={} | path={}", requestId, request.getRequestURI(), ex);
 
         return ResponseEntity
                 .status(HttpStatus.INTERNAL_SERVER_ERROR)

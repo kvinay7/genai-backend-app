@@ -7,6 +7,7 @@ C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\filters\AuthFilter.java
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\models\ChatMessage.java
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\exceptions\GlobalExceptionHandler.java
+C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\config\LogbackConfig.java
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\services\ChatService.java
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\config\SecurityConfig.java
 C:\Users\karan\Desktop\Projects\genai-backend-app\backend-service\src\main\java\com\example\backend\config\AsyncConfig.java

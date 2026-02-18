@@ -4,6 +4,8 @@ import com.example.backend.dto.CreateChatRequest;
 import com.example.backend.dto.UpdateChatRequest;
 import com.example.backend.models.ChatMessage;
 import com.example.backend.services.ChatService;
+
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -21,18 +23,23 @@ public class ChatController {
 
     @PostMapping
     public ResponseEntity<ChatMessage> createChat(
-            @Valid @RequestBody CreateChatRequest request) {
-        ChatMessage response = chatService.createChat(request.userId(), request.prompt());
+            HttpServletRequest request,
+            @Valid @RequestBody CreateChatRequest body) {
+
+        String userId = (String) request.getAttribute("userId");
+        ChatMessage response = chatService.createChat(userId, body.prompt());
         return ResponseEntity.ok(response);
     }
 
     @GetMapping
     public ResponseEntity<Page<ChatMessage>> getChats(
-            @RequestParam String userId,
+            HttpServletRequest request,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size,
             @RequestParam(defaultValue = "createdAt") String sortBy,
             @RequestParam(defaultValue = "DESC") Sort.Direction direction) {
+
+        String userId = (String) request.getAttribute("userId");
         Pageable pageable = PageRequest.of(page, size, Sort.by(direction, sortBy));
         Page<ChatMessage> chats = chatService.getChats(userId, pageable);
         return ResponseEntity.ok(chats);
@@ -62,7 +69,8 @@ public class ChatController {
     }
 
     @DeleteMapping
-    public ResponseEntity<Void> deleteChatsByUser(@RequestParam String userId) {
+    public ResponseEntity<Void> deleteChatsByUser(HttpServletRequest request) {
+        String userId = (String) request.getAttribute("userId");
         chatService.deleteChatsByUserId(userId);
         return ResponseEntity.noContent().build();
     }

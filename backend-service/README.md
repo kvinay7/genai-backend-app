@@ -15,6 +15,7 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
   - Security Boundary: Authentication via headers (never exposing secrets to frontend)
   - State Centralization: Persistent chat history in database
   - Compute Offloading: LLM inference executed in separate Python service
+  - Observability: Structured JSON logs with request tracing, health endpoint
 
 ## Tech Stack
 - Java + Spring Boot
@@ -26,9 +27,9 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
   - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes, pagination and sorting)
   - Services → Pure business logic, orchestration of LLM service calls, HTTP-agnostic
   - Repositories → Data access only, no business logic
-  - Global Exception Handler for uncaught exceptions (Prevents leaking internal errors).
-  - Filters/Middlewares → Cross-cutting concerns executed before/after handlers (logging & authentication)
-  - Config → CORS & Security
+  - Global Exception Handler → Centralized error handling with requestId
+  - Filters/Middlewares → Cross-cutting concerns executed before/after handlers (Request Tracing & Authentication)
+  - Config → CORS (configurable origins), Security (CSRF disabled, stateless), Logging (programmatic JSON setup)
 
 - **Database Design**
   - Main entity: `ChatMessage`
