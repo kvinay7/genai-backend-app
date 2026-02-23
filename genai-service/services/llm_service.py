@@ -4,6 +4,7 @@ from typing import Dict, Any
 
 from agentic_mcp.graph import build_graph
 
+import uuid
 
 class LLMService:
     def __init__(self):
@@ -12,7 +13,13 @@ class LLMService:
 
     def process_query(self, user_id: str, prompt: str) -> Dict[str, Any]:
         """Process user query using the LangGraph workflow, then save to repository."""
-        initial_state = {"user_id": user_id, "query": prompt}
+        initial_state = { 
+            "execution_id": str(uuid.uuid4()), 
+            "trace_id": str(uuid.uuid4()), 
+            "role": "admin", 
+            "query": prompt, 
+            "retry_count": 0 
+        }
 
         result_state = self.graph.invoke(initial_state)
 

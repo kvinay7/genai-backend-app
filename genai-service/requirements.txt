@@ -2,5 +2,6 @@ flask
 flask-cors
 python-dotenv
 pdfplumber
-
+langgraph
 requests
+dotenv

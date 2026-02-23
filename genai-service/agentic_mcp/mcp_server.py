@@ -1,8 +1,5 @@
-"""MCP Blueprint inside `agentic_mcp` package."""
 from flask import Blueprint, request, jsonify
-
-from .tools import eligibility_check
-
+from agentic_mcp.tools import TOOL_REGISTRY
 
 mcp_blueprint = Blueprint("mcp", __name__)
 
@@ -11,12 +8,14 @@ mcp_blueprint = Blueprint("mcp", __name__)
 def run_tool():
     data = request.get_json() or {}
 
-    tool = data.get("tool")
+    tool_name = data.get("tool")
     payload = data.get("payload", {})
 
-    if tool == "eligibility_check":
-        result = eligibility_check(payload)
-    else:
+    if tool_name not in TOOL_REGISTRY:
         return jsonify({"error": "Unknown tool"}), 400
 
-    return jsonify(result), 200
+    try:
+        result = TOOL_REGISTRY[tool_name](payload)
+        return jsonify(result), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

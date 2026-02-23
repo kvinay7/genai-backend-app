@@ -1,82 +1,57 @@
-"""Graph orchestration (moved into `agentic_mcp` package)."""
-from typing import Callable, Dict
-
-END = "__END__"
-
-
-class StateGraph:
-    def __init__(self, state_cls=dict):
-        self.state_cls = state_cls
-        self.nodes: Dict[str, Callable[[dict], dict]] = {}
-        self.entry_point: str | None = None
-        self.conditional_edges: Dict[str, tuple[Callable, dict]] = {}
-        self.edges: Dict[str, str] = {}
-
-    def add_node(self, name: str, fn: Callable[[dict], dict]):
-        self.nodes[name] = fn
-
-    def set_entry_point(self, name: str):
-        self.entry_point = name
-
-    def add_conditional_edges(self, from_node: str, condition_fn: Callable[[dict], str], mapping: dict):
-        self.conditional_edges[from_node] = (condition_fn, mapping)
-
-    def add_edge(self, from_node: str, to_node: str):
-        self.edges[from_node] = to_node
-
-    def compile(self):
-        return self
-
-    def invoke(self, initial_state: dict) -> dict:
-        if not self.entry_point:
-            raise RuntimeError("No entry point set for graph")
-
-        state = self.state_cls(initial_state)
-        current = self.entry_point
-
-        while current and current != END:
-            node_fn = self.nodes.get(current)
-            if not node_fn:
-                break
-
-            state = node_fn(state) or state
-
-            if current in self.conditional_edges:
-                cond_fn, mapping = self.conditional_edges[current]
-                key = cond_fn(state)
-                next_node = mapping.get(key)
-            else:
-                next_node = state.get("next")
-                if not next_node:
-                    next_node = self.edges.get(current)
-
-            if not next_node or next_node == "end" or next_node == END:
-                break
-
-            current = next_node
-
-        return state
+from langgraph.graph import StateGraph, END
+from .state import AgentState
+from .agents import (
+    router_agent,
+    policy_agent,
+    executor_agent,
+    formatter_agent,
+)
 
 
 def build_graph():
-    from .agents import master_agent, eligibility_agent
+    workflow = StateGraph(AgentState)
 
-    workflow = StateGraph(dict)
+    workflow.add_node("router", router_agent)
+    workflow.add_node("policy", policy_agent)
+    workflow.add_node("executor", executor_agent)
+    workflow.add_node("formatter", formatter_agent)
 
-    workflow.add_node("master", master_agent)
-    workflow.add_node("eligibility", eligibility_agent)
+    workflow.set_entry_point("router")
 
-    workflow.set_entry_point("master")
-
+    # Router Conditional
     workflow.add_conditional_edges(
-        "master",
-        lambda state: state.get("next"),
+        "router",
+        lambda s: "error" if s.get("error") else "ok",
         {
-            "eligibility": "eligibility",
-            "end": END,
+            "error": "formatter",
+            "ok": "policy",
         },
     )
 
-    workflow.add_edge("eligibility", END)
+    # Policy Conditional
+    workflow.add_conditional_edges(
+        "policy",
+        lambda s: "error" if s.get("error") else "ok",
+        {
+            "error": "formatter",
+            "ok": "executor",
+        },
+    )
+
+    # Executor Retry Logic
+    workflow.add_conditional_edges(
+        "executor",
+        lambda s: (
+            "retry"
+            if s.get("error") and s.get("retry_count", 0) < 2
+            else "done"
+        ),
+        {
+            "retry": "executor",
+            "done": "formatter",
+        },
+    )
+
+    workflow.add_edge("formatter", END)
 
     return workflow.compile()
