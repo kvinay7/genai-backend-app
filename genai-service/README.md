@@ -50,6 +50,15 @@ The app runs as a single Flask service (port 5001) with:
 3. **Executor Agent** → Calls MCP client → `/tools/run` with retry logic (max 2 retries on error)
 4. **Formatter Agent** → Structures final response with metadata (execution_id, latency_ms, etc.). If any stage detects an error, flow short-circuits to the formatter agent with error details.
 
+## Design Principles
+
+- **Separation of Concerns** — HTTP handling, orchestration, and business logic are isolated.
+- **Deterministic Execution Boundary** — AI reasoning is separated from tool execution via MCP.
+- **Fail-Fast Workflow** — Router and Policy short-circuit on error.
+- **Bounded Retries** — Executor retries are capped to prevent infinite loops.
+- **Stateless Graph Execution** — Enables horizontal scalability.
+- **Structured Observability** — execution_id and trace_id for tracing.
+
 ## Agentic Workflow (LangGraph State Machine)
 
 ```mermaid
@@ -113,15 +122,6 @@ sequenceDiagram
     Service-->>Handler: structured JSON
     Handler-->>Client: HTTP response
 ```
-
-## Design Principles
-
-- **Separation of Concerns** — HTTP handling, orchestration, and business logic are isolated.
-- **Deterministic Execution Boundary** — AI reasoning is separated from tool execution via MCP.
-- **Fail-Fast Workflow** — Router and Policy short-circuit on error.
-- **Bounded Retries** — Executor retries are capped to prevent infinite loops.
-- **Stateless Graph Execution** — Enables horizontal scalability.
-- **Structured Observability** — execution_id and trace_id for tracing.
 
 ## Quickstart (Run Locally)
 
