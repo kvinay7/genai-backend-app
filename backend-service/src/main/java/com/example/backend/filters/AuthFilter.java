@@ -4,15 +4,20 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.util.List;
 
 @Component
 @Order(2)
@@ -21,34 +26,53 @@ public class AuthFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(AuthFilter.class);
 
     @Override
-    protected void doFilterInternal(
-            HttpServletRequest req,
-            HttpServletResponse res,
-            FilterChain chain
-    ) throws ServletException, IOException {
+    protected void doFilterInternal(HttpServletRequest req,
+                                    HttpServletResponse res,
+                                    FilterChain chain)
+            throws ServletException, IOException {
 
-        // Allow CORS preflight
         if ("OPTIONS".equalsIgnoreCase(req.getMethod())) {
             chain.doFilter(req, res);
             return;
         }
 
-        String auth = req.getHeader("Authorization");
-        String requestId = (String) req.getAttribute("requestId");  // From LoggingFilter
+        String authHeader = req.getHeader("Authorization");
+        String requestId = (String) req.getAttribute("requestId");
 
-        if (auth == null || auth.isBlank()) {
-            logger.warn("[{}] Unauthorized request to {}", requestId, req.getRequestURI());
+        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+
+            logger.warn("[{}] Unauthorized request {}", requestId, req.getRequestURI());
+
             res.setStatus(HttpStatus.UNAUTHORIZED.value());
             res.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            res.getWriter().write("{\"error\": \"Missing or invalid authorization\"}");
+            res.getWriter().write("{\"error\":\"Unauthorized\"}");
+
             return;
         }
 
-        // TODO: Extract userId from JWT token properly
-        String userId = "user123"; // Mock for now
+        try {
 
-        req.setAttribute("userId", userId);
+            String token = authHeader.substring(7);
 
-        chain.doFilter(req, res);
+            // TODO replace with JWT validation
+            String userId = "user123";
+
+            req.setAttribute("userId", userId);
+
+            UsernamePasswordAuthenticationToken authentication =
+                    new UsernamePasswordAuthenticationToken(userId, null, List.of());
+
+            SecurityContextHolder.getContext().setAuthentication(authentication);
+
+            chain.doFilter(req, res);
+
+        } catch (Exception e) {
+
+            logger.error("[{}] Token validation failed", requestId);
+
+            res.setStatus(HttpStatus.UNAUTHORIZED.value());
+            res.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            res.getWriter().write("{\"error\":\"Invalid token\"}");
+        }
     }
 }
