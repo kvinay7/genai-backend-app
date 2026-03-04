@@ -5,17 +5,18 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.LoggerContext;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.ConsoleAppender;
-import jakarta.annotation.PostConstruct;
 import net.logstash.logback.encoder.LogstashEncoder;
 import net.logstash.logback.fieldnames.LogstashFieldNames;
 import org.slf4j.LoggerFactory;
-import org.springframework.context.annotation.Configuration;
+import org.springframework.boot.context.event.ApplicationStartedEvent;
+import org.springframework.context.ApplicationListener;
+import org.springframework.stereotype.Component;
 
-@Configuration
-public class LogbackConfig {
+@Component
+public class LogbackInitializer implements ApplicationListener<ApplicationStartedEvent> {
 
-    @PostConstruct
-    public void configureLogback() {
+    @Override
+    public void onApplicationEvent(ApplicationStartedEvent event) {
 
         LoggerContext context = (LoggerContext) LoggerFactory.getILoggerFactory();
         context.reset();
@@ -33,7 +34,7 @@ public class LogbackConfig {
 
         ConsoleAppender<ILoggingEvent> consoleAppender = new ConsoleAppender<>();
         consoleAppender.setContext(context);
-        consoleAppender.setName("consoleAppender");
+        consoleAppender.setName("CONSOLE");
         consoleAppender.setEncoder(encoder);
         consoleAppender.start();
 
