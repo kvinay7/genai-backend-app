@@ -4,9 +4,11 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+
 import org.springframework.core.annotation.Order;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
@@ -19,6 +21,7 @@ import java.util.UUID;
 public class LoggingFilter extends OncePerRequestFilter {
 
     private static final Logger logger = LoggerFactory.getLogger(LoggingFilter.class);
+    private static final String HEADER = "X-Correlation-Id";
 
     @Override
     protected void doFilterInternal(HttpServletRequest req,
@@ -26,16 +29,22 @@ public class LoggingFilter extends OncePerRequestFilter {
                                     FilterChain chain)
             throws IOException, ServletException {
 
-        String requestId = UUID.randomUUID().toString();
-        MDC.put("requestId", requestId);  // Add to MDC for all logs in this request
+        String requestId = req.getHeader(HEADER);
+
+        if (requestId == null || requestId.isBlank()) {
+            requestId = UUID.randomUUID().toString();
+        }
+
+        MDC.put("requestId", requestId);
         req.setAttribute("requestId", requestId);
+        res.setHeader(HEADER, requestId);
 
         logger.info("[{}] {} {}", requestId, req.getMethod(), req.getRequestURI());
 
         try {
             chain.doFilter(req, res);
         } finally {
-            MDC.clear(); 
+            MDC.clear();
         }
     }
 }
