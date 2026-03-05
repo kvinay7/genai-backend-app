@@ -24,7 +24,7 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
 
 ## Architecture
 - **Layered Architecture**:
-  - Controllers → HTTP-only responsibilities (routing, binding, validation, status codes, pagination and sorting)
+  - Controllers → HTTP-only responsibilities (routing, binding, validation, Responses, pagination and sorting)
   - Services → Pure business logic, orchestration of LLM service calls, HTTP-agnostic
   - Repositories → Data access only, no business logic
   - Global Exception Handler → Centralized error handling with requestId
@@ -64,7 +64,7 @@ mvn clean spring-boot:run
 ## Request Processing Flow
 Every API request follows a predictable, production-grade pipeline for reliability, observability, and security.
 
-### Step-by-Step Flow
+### [Step-by-Step Flow](https://github.com/kvinay7/interview-preparation/blob/main/Spring.md#1-http-requestresponse-flow)
 1. **Client Request**  
    - HTTP request arrives with `Authorization: Bearer <token>` header (required for all endpoints except preflight).
 
