@@ -24,7 +24,7 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
 
 ## Architecture
 - **Layered Architecture**:
-  - Controllers → HTTP-only responsibilities (routing, binding, validation, Responses, pagination and sorting)
+  - Controllers → HTTP-only responsibilities (request routing/binding, validation/sanitization, pagination/sorting, response handling)
   - Services → Pure business logic, orchestration of LLM service calls, HTTP-agnostic
   - Repositories → Data access only, no business logic
   - Global Exception Handler → Centralized error handling with requestId
