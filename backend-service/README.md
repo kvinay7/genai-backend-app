@@ -24,14 +24,14 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
 
 ## Architecture
 - **Layered Architecture**:
-  - Controllers → HTTP-only responsibilities (request routing/binding, validation/sanitization, pagination/sorting, response handling)
+  - Controllers → HTTP-only responsibilities - [API Design](https://blog.algomaster.io/i/142880142/step-5-api-design) (request routing/binding, validation/sanitization, pagination/sorting, response handling)
   - Services → Pure business logic, orchestration of LLM service calls, HTTP-agnostic
   - Repositories → Data access only, no business logic
   - Global Exception Handler → Centralized error handling with requestId
   - Filters/Middlewares → Cross-cutting concerns executed before/after handlers (Request Tracing & Authentication)
   - Config → CORS (configurable origins), Security (CSRF disabled, stateless), Logging (programmatic JSON setup)
 
-- **Database Design**:
+- **[Database Design](https://github.com/kvinay7/interview-preparation/blob/main/DBMS.md)**:
   - Strong Entity: `User` (PK: id), `ChatMessage` (PK: id)
   - Relationship: 1:N (User → ChatMessages)
   - Foreign Key: `user_id` (Referential Integrity enforced)
