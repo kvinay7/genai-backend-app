@@ -183,27 +183,7 @@ CREATE INDEX idx_user_created_desc ON chat_messages(user_id, created_at DESC);
 
 ### ACID Transactions
 
-The service demonstrates ACID principles in the chat creation workflow:
-
-```java
-@Transactional(isolation = Isolation.READ_COMMITTED)
-public ChatMessage createChat(String userEmail, String prompt) {
-    // Atomicity: All operations succeed or all fail
-    User user = userRepository.findByEmail(userEmail)
-        .orElseGet(() -> userRepository.save(new User(userEmail, "User")));
-    
-    ChatMessage msg = new ChatMessage(user, prompt, null);
-    chatRepository.save(msg);           // Save prompt
-    
-    String response = llmClient.infer(prompt);  // External call
-    msg.setResponse(response);
-    chatRepository.save(msg);           // Save response
-    
-    return msg;  // Commit transaction
-}
-```
-
-- **Atomicity**: "Save prompt → Call LLM → Save response" as one unit
+- **Atomicity**: "Save prompt (TX1) → Call LLM → Save response (TX2)"
 - **Consistency**: Foreign key and NOT NULL constraints enforced
 - **Isolation**: READ_COMMITTED prevents dirty reads
 - **Durability**: WAL (Write-Ahead Logging) ensures persistence

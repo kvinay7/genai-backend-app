@@ -24,26 +24,6 @@ public class ChatService {
     @Autowired
     private LLMClient llmClient;
 
-    @Transactional(isolation = Isolation.READ_COMMITTED)  // TCL
-    public ChatMessage createChat(String userEmail, String prompt) {
-        // ACID in this method:
-        // Atomicity: all or nothing
-        // Consistency: foreign key + not null enforced
-        // Isolation: READ_COMMITTED prevents dirty reads
-        // Durability: WAL + PostgreSQL flush
-
-        // BEGIN TRANSACTION (Spring handles)
-        User user = userRepository.findByEmail(userEmail)
-                .orElseGet(() -> userRepository.save(new User(userEmail, "User"))); // Assume name is "User" for simplicity
-
-        ChatMessage msg = new ChatMessage(user, prompt, null);
-        chatRepository.save(msg);           // DML
-        String response = llmClient.infer(prompt);
-        msg.setResponse(response);
-        chatRepository.save(msg);           // DML
-        return msg;                     // COMMIT
-    }
-
     public Page<ChatMessage> getChats(String userEmail, Pageable pageable) {
         User user = userRepository.findByEmail(userEmail).orElse(null);
         if (user == null) return Page.empty();
@@ -55,12 +35,31 @@ public class ChatService {
         return chatRepository.findById(id).orElse(null);
     }
 
-    public ChatMessage updateChat(Long id, String prompt, String response) {
-        return chatRepository.findById(id).map(chat -> {
-            chat.setPrompt(prompt);
-            chat.setResponse(response);
-            return chatRepository.save(chat);
-        }).orElse(null);
+    // Step 1: Save prompt and commit immediately — release DB connection
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ChatMessage savePendingChat(String userEmail, String prompt) {
+        User user = userRepository.findByEmail(userEmail)
+                .orElseGet(() -> userRepository.save(new User(userEmail, "User")));
+        ChatMessage msg = new ChatMessage(user, prompt, null);
+        return chatRepository.save(msg);
+        // Transaction commits here — DB connection returned to pool
+    }
+
+    // Step 2: Save response in a separate transaction after LLM call
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ChatMessage updateChatResponse(Long chatId, String response) {
+        ChatMessage msg = chatRepository.findById(chatId)
+                .orElseThrow(() -> new RuntimeException("Chat not found"));
+        msg.setResponse(response);
+        return chatRepository.save(msg);
+        // Transaction commits here
+    }
+
+    // Orchestrator — no @Transactional here
+    public ChatMessage createChat(String userEmail, String prompt) {
+        ChatMessage msg = savePendingChat(userEmail, prompt);  // TX 1 — commits fast
+        String response = llmClient.infer(prompt);             // LLM call — no DB lock
+        return updateChatResponse(msg.getId(), response);      // TX 2 — commits fast
     }
 
     public void deleteChat(Long id) {
