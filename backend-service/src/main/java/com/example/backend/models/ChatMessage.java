@@ -1,48 +1,56 @@
 package com.example.backend.models;
 
 import jakarta.persistence.*;
-import java.time.Instant;
+import java.time.LocalDateTime;
+
+// Why PostgreSQL (DBMS) and not CSV/File System?
+// - Persistence across restarts
+// - ACID transactions for "save prompt + LLM response"
+// - Relationships (User → many ChatMessages)
+// - Indexing & querying (fast history fetch)
 
 @Entity
-@Table(name = "chat_messages")
+@Table(name = "chat_messages",
+       indexes = @Index(columnList = "user_id, created_at DESC")) // Composite index
 public class ChatMessage {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(nullable = false)
-    private String userId;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "user_id", nullable = false)
+    private User user;                    // Foreign Key + Referential Integrity
 
-    @Column(nullable = false, columnDefinition = "TEXT")
+    @Column(nullable = false)
     private String prompt;
 
-    @Column(columnDefinition = "TEXT")
     private String response;
 
-    @Column(nullable = false)
-    private Instant createdAt;
+    @Column(nullable = false, updatable = false)
+    private LocalDateTime createdAt = LocalDateTime.now();
 
-    @Column
-    private Instant updatedAt;
+    @Column(name = "user_name")
+    private String userName;   // Denormalized for performance
 
     // Constructors
     public ChatMessage() {
-        this.createdAt = Instant.now();
+        this.createdAt = LocalDateTime.now();
     }
 
-    public ChatMessage(String userId, String prompt, String response) {
-        this.userId = userId;
+    public ChatMessage(User user, String prompt, String response) {
+        this.user = user;
         this.prompt = prompt;
         this.response = response;
-        this.createdAt = Instant.now();
+        this.userName = user.getName(); // Set denormalized field
+        this.createdAt = LocalDateTime.now();
     }
 
     // Getters and Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
-    public String getUserId() { return userId; }
-    public void setUserId(String userId) { this.userId = userId; }
+    public User getUser() { return user; }
+    public void setUser(User user) { this.user = user; }
 
     public String getPrompt() { return prompt; }
     public void setPrompt(String prompt) { this.prompt = prompt; }
@@ -50,9 +58,9 @@ public class ChatMessage {
     public String getResponse() { return response; }
     public void setResponse(String response) { this.response = response; }
 
-    public Instant getCreatedAt() { return createdAt; }
-    public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }
+    public LocalDateTime getCreatedAt() { return createdAt; }
+    public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 
-    public Instant getUpdatedAt() { return updatedAt; }
-    public void setUpdatedAt(Instant updatedAt) { this.updatedAt = updatedAt; }
+    public String getUserName() { return userName; }
+    public void setUserName(String userName) { this.userName = userName; }
 }

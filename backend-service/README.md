@@ -38,6 +38,15 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
   - Foreign Key: `user_id`
   - Composite Index: `(user_id, created_at DESC)` for fast chat history retrieval
 
+- **Database Design**
+  - Strong Entity: User (PK: id), ChatMessage (PK: id)
+  - Relationship: 1:N (User → ChatMessages)
+  - Foreign Key: user_id (Referential Integrity enforced)
+  - Composite Key/Index: (user_id, created_at DESC)
+  - Normalized: Separate users and chat_messages tables (3NF)
+  - Selectively denormalized: Added user_name in chat_messages for O(1) history display (avoids JOIN on every read)
+  - Full "save prompt → LLM call → save response" is atomic using @Transactional
+
 - **Process & Thread Management**:
   - The application runs as **two separate OS processes**:
     - `backend-service` → One JVM process (Spring Boot)
