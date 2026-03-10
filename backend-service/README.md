@@ -38,7 +38,11 @@ A production-oriented backend service demonstrating HTTP fundamentals, REST desi
   - Composite Key/Index: `(user_id, created_at DESC)`
   - Normalized: Separate users and chat_messages tables (3NF)
   - Selectively denormalized: Added `user_name` in chat_messages for O(1) history display (avoids JOIN on every read)
-  - Full "save prompt → LLM call → save response" is atomic using `@Transactional`
+  - `ACID` Demonstrated:
+    - Atomicity: all or nothing - Full "save prompt → LLM call → save response" is atomic using `@Transactional`
+    - Consistency: foreign key + not null enforced
+    - Isolation: READ_COMMITTED prevents dirty reads
+    - Durability: WAL + PostgreSQL flush
 
 - **Process & Thread Management**:
   - The application runs as **two separate OS processes**:
