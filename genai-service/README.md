@@ -1,102 +1,370 @@
 # GenAI Service
 
-Flask-based service responsible for LLM inference and Agentic workflow orchestration with Model Context Protocol (MCP) tool integration.
+A Flask-based microservice that implements agentic AI workflows using LangGraph state machines and Model Context Protocol (MCP) for deterministic tool execution. The service orchestrates multi-agent systems for processing user queries with structured tool-based responses.
 
-## Purpose
-- Receive prompts from the `backend-service` via the `/infer` endpoint
-- Orchestrate multi-stage agentic workflows using LangGraph state machine
-- Execute deterministic, role-based tool operations via MCP client
-- Persist chat history and responses to repository
-- Return structured JSON responses to the caller
+## Overview
 
-## Tech Stack
-- Python
-- Flask
-- LangGraph (for workflow graph)
+This service provides AI-powered query processing through a sophisticated agentic architecture:
+- **Multi-Agent Orchestration**: Router, Policy, Executor, and Formatter agents
+- **State Machine Workflows**: Deterministic execution using LangGraph
+- **Tool-Based Interactions**: MCP protocol for business logic execution
+- **RAG Capabilities**: Document processing and context retrieval
+- **Production-Ready Features**: Structured logging, error handling, observability
 
 ## Architecture
 
-### High-Level Components
-The app runs as a single Flask service (port 5001) with:
+### Core Components
 
-**Blueprints:**
-- `llm_blueprint` (handlers) — `/infer` endpoint for query processing
-- `mcp_blueprint` (mcp_server) — `/tools/run` endpoint for tool execution
+#### Agentic MCP Package (`agentic_mcp/`)
+The heart of the service implementing the agentic workflow system:
 
-**Middleware:**
-- `log_request` — request/response logging
-- `authenticate` — sets user context (g.user_id)
-- `register_error_handlers` — centralized error handling
-
-**Core Services:**
-- `LLMService` — orchestrates the StateGraph and manages chat persistence
-- `ChatRepository` — in-memory chat storage (execution ID, user ID, prompts, responses)
-- `VectorRepository` — vector embeddings for RAG (optional)
-
-### Agent Orchestration (LangGraph Workflow)
-
-**`agentic_mcp/` package:**
-- `graph.py` — StateGraph definition with 4-stage pipeline
-- `state.py` — AgentState TypedDict (execution_id, trace_id, role, query, intent, tool_result, retry_count, error, response)
-- `agents.py` — Four agents: router, policy, executor, formatter
-- `mcp_client.py` — HTTP client for `/tools/run` calls
-- `mcp_server.py` — Flask blueprint exposing tool registry
-- `tools.py` — TOOL_REGISTRY with eligibility_check & get_employee_age tools
-
-### Agents
-
-1. **Router Agent** → Analyzes query and selects appropriate tool (eligibility_check, get_employee_age)
-2. **Policy Agent** → Validates role-based access control (admin/hr only)
-3. **Executor Agent** → Calls MCP client → `/tools/run` with retry logic (max 2 retries on error)
-4. **Formatter Agent** → Structures final response with metadata (execution_id, latency_ms, etc.). If any stage detects an error, flow short-circuits to the formatter agent with error details.
-
-## Design Principles
-
-- **Separation of Concerns** — HTTP handling, orchestration, and business logic are isolated.
-- **Deterministic Execution Boundary** — AI reasoning is separated from tool execution via MCP.
-- **Fail-Fast Workflow** — Router and Policy short-circuit on error.
-- **Bounded Retries** — Executor retries are capped to prevent infinite loops.
-- **Stateless Graph Execution** — Enables horizontal scalability.
-- **Structured Observability** — execution_id and trace_id for tracing.
-
-## Agentic Workflow (LangGraph State Machine)
-
-```mermaid
-flowchart LR
-    Start([Start]) --> Router
-
-    Router -->|error| Formatter
-    Router -->|ok| Policy
-
-    Policy -->|error| Formatter
-    Policy -->|ok| Executor
-
-    Executor -->|error & retry < 2| Executor
-    Executor -->|success or max retry| Formatter
-
-    Formatter --> End([End])
+**State Management (`state.py`)**:
+```python
+class AgentState(TypedDict):
+    execution_id: str
+    trace_id: str
+    role: str
+    query: str
+    intent: Optional[str]
+    selected_tool: Optional[str]
+    tool_result: Optional[Dict]
+    retry_count: int
+    error: Optional[str]
+    response: Optional[Dict]
+    latency_ms: Optional[int]
 ```
 
-## End-to-End Execution Flow
+**Workflow Graph (`graph.py`)**:
+- **Router Agent**: Analyzes queries and selects appropriate tools
+- **Policy Agent**: Enforces role-based access control (admin/hr only)
+- **Executor Agent**: Executes tools with retry logic (max 2 retries)
+- **Formatter Agent**: Structures final responses with metadata
+
+**Agent Implementations (`agents.py`)**:
+- Deterministic tool selection and execution
+- Error handling and retry mechanisms
+- Structured response formatting
+- Performance monitoring with latency tracking
+
+**MCP Integration (`mcp_client.py`, `mcp_server.py`)**:
+- HTTP client for tool execution
+- Flask blueprint exposing tool registry
+- Standardized tool calling interface
+
+**Tool Registry (`tools.py`)**:
+- `eligibility_check`: Validates employee eligibility (age ≥21, tenure ≥2)
+- `get_employee_age`: Retrieves employee age information
+- Mock employee database for demonstration
+
+#### Service Layer (`services/`)
+**LLMService (`llm_service.py`)**:
+- Orchestrates the complete agentic workflow
+- Manages chat persistence and retrieval
+- Integrates with repositories for data storage
+- Provides unified interface for query processing
+
+#### Repository Layer (`repositories/`)
+**ChatRepository (`chat_repository.py`)**:
+- In-memory storage for chat sessions
+- CRUD operations for chat messages
+- User-specific chat retrieval
+
+**VectorRepository (`vector_repository.py`)**:
+- Vector embeddings for RAG functionality
+- Context retrieval from document collections
+
+#### RAG Pipeline (`rag/`)
+**RAGPipeline (`rag_pipeline.py`)**:
+- PDF document processing using pdfplumber
+- Text extraction and chunking
+- Integration with vector storage
+
+### Middleware Stack (`middleware/`)
+- **LoggingMiddleware**: Request/response logging with correlation IDs
+- **AuthMiddleware**: User context injection and authentication
+- **ErrorHandler**: Global exception handling and structured error responses
+
+### Flask Application (`app.py`)
+- Blueprint registration for modular routing
+- CORS configuration for cross-origin requests
+- Middleware application order
+- Development vs production configuration
+
+## Agentic Workflow
+
+### State Machine Flow
 
 ```mermaid
-sequenceDiagram
-    actor Client
-    participant Handler as Flask Handler (/infer)
-    participant Service as LLMService
-    participant Graph as LangGraph (State Machine)
-    participant Router as Router Agent
-    participant Policy as Policy Agent
-    participant Executor as Executor Agent
-    participant MCPClient as MCP Client
-    participant MCPServer as MCP Server (/tools/run)
-    participant Tool as Tool (Business Logic)
-    participant Formatter as Formatter Agent
+flowchart TD
+    A[Start] --> R[Router Agent]
+    R --> P{Policy Check}
+    P -->|Fail| F[Formatter Agent]
+    P -->|Pass| E[Executor Agent]
+    E --> C{Call Tool}
+    C --> S{Success?}
+    S -->|No| RT{Retry Count < 2?}
+    RT -->|Yes| E
+    RT -->|No| F
+    S -->|Yes| F
+    F --> END[End]
+```
 
-    Client->>Handler: POST /infer
-    Handler->>Service: process(prompt, user_id)
+### Agent Responsibilities
 
-    Service->>Graph: invoke(initial_state)
+#### 1. Router Agent
+- **Input**: Raw user query
+- **Processing**: Tool selection logic (currently deterministic)
+- **Output**: Selected tool intent
+- **Error Handling**: Invalid tool selection
+
+#### 2. Policy Agent
+- **Input**: User role from request context
+- **Processing**: Role-based access control
+- **Output**: Authorization decision
+- **Roles**: admin, hr (authorized), others (denied)
+
+#### 3. Executor Agent
+- **Input**: Selected tool and query
+- **Processing**: MCP tool execution with retry logic
+- **Output**: Tool results or error state
+- **Retry Logic**: Maximum 2 retries on failure
+
+#### 4. Formatter Agent
+- **Input**: Final state (success or error)
+- **Processing**: Structured response formatting
+- **Output**: Standardized JSON response with metadata
+
+## Technology Stack
+
+- **Framework**: Flask 2.x
+- **Workflow Engine**: LangGraph
+- **Language**: Python 3.8+
+- **HTTP Client**: Requests
+- **Document Processing**: pdfplumber
+- **Environment Management**: python-dotenv
+- **CORS**: Flask-CORS
+
+## Dependencies
+
+```
+flask==2.3.3
+flask-cors==4.0.0
+langgraph==0.0.32
+requests==2.31.0
+pdfplumber==0.10.3
+python-dotenv==1.0.0
+```
+
+## Configuration
+
+### Environment Variables
+```bash
+# Required for LLM operations (if integrated)
+OPENAI_API_KEY=your_api_key_here
+
+# Flask configuration
+FLASK_ENV=development
+FLASK_DEBUG=True
+```
+
+### Application Configuration
+- **CORS Origins**: Restricted to `https://frontend.com`
+- **Debug Mode**: Enabled for development
+- **Port**: 5001 (configurable)
+
+## API Endpoints
+
+### POST `/infer` - Main Query Processing
+Orchestrates the complete agentic workflow for user queries.
+
+**Request**:
+```bash
+curl -X POST http://localhost:5001/infer \
+  -H "Content-Type: application/json" \
+  -d '{"prompt": "Check eligibility for employee 123"}'
+```
+
+**Response**:
+```json
+{
+  "response": {
+    "execution_id": "uuid-123",
+    "status": "success",
+    "data": {
+      "status": "success",
+      "eligible": true,
+      "reason": "Meets criteria"
+    },
+    "metadata": {
+      "intent": "eligibility_check",
+      "role": "admin",
+      "latency_ms": 45,
+      "retry_count": 0,
+      "trace_id": "uuid-456"
+    }
+  }
+}
+```
+
+### POST `/tools/run` - Direct Tool Execution
+Exposes the MCP tool registry for direct tool invocation.
+
+**Supported Tools**:
+- `eligibility_check`: Validates employee eligibility criteria
+- `get_employee_age`: Retrieves employee age information
+
+**Request**:
+```bash
+curl -X POST http://localhost:5001/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
+```
+
+**Response**:
+```json
+{
+  "status": "success",
+  "eligible": true,
+  "reason": "Meets criteria"
+}
+```
+
+## Tool Registry
+
+### Eligibility Check Tool
+**Purpose**: Determine if an employee meets eligibility criteria
+**Criteria**: Age ≥ 21 AND Tenure ≥ 2 years
+**Input**: Employee ID (extracted from query)
+**Output**: Eligibility status with reason
+
+### Employee Age Tool
+**Purpose**: Retrieve employee age information
+**Input**: Employee ID (extracted from query)
+**Output**: Employee age or null if not found
+
+### Mock Database
+```python
+EMPLOYEE_DB = {
+    "123": {"age": 30, "tenure": 5},  # Eligible
+    "456": {"age": 20, "tenure": 1},  # Not eligible
+}
+```
+
+## Data Flow
+
+### End-to-End Request Processing
+
+1. **Client Request** → POST `/infer` with user prompt
+2. **Middleware** → Logging, authentication, user context injection
+3. **LLMService** → Initialize workflow with execution/trace IDs
+4. **LangGraph** → Execute agentic state machine:
+   - Router → Select appropriate tool
+   - Policy → Validate user permissions
+   - Executor → Call MCP tool with retries
+   - Formatter → Structure final response
+5. **Repository** → Persist chat history
+6. **Response** → Structured JSON with metadata
+
+### Error Handling
+
+- **Router Errors**: Invalid tool selection
+- **Policy Errors**: Unauthorized access (non-admin/hr roles)
+- **Executor Errors**: Tool execution failures with retry logic
+- **Formatter Errors**: Structured error responses with trace information
+
+## Development Setup
+
+### Prerequisites
+- Python 3.8 or higher
+- pip package manager
+
+### Installation
+```bash
+cd genai-service
+python -m venv venv
+source venv/bin/activate  # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### Environment Setup
+```bash
+# Create .env file
+echo "OPENAI_API_KEY=your_key_here" > .env
+```
+
+### Running Locally
+```bash
+python app.py
+# Service starts on http://localhost:5001
+```
+
+### Testing Tools
+```bash
+# Test eligibility check
+curl -X POST http://localhost:5001/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
+
+# Test age retrieval
+curl -X POST http://localhost:5001/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "get_employee_age", "payload": {"query": "employee 456"}}'
+```
+
+## Project Structure
+
+```
+genai-service/
+├── app.py                      # Flask application entry point
+├── llm_config.py              # LLM client configuration
+├── requirements.txt           # Python dependencies
+├── agentic_mcp/               # Core agentic workflow package
+│   ├── __init__.py
+│   ├── graph.py              # LangGraph state machine
+│   ├── state.py              # AgentState type definitions
+│   ├── agents.py             # Agent implementations
+│   ├── mcp_client.py         # MCP HTTP client
+│   ├── mcp_server.py        # MCP Flask blueprint
+│   └── tools.py              # Tool registry and implementations
+├── handlers/
+│   └── llm_handler.py        # /infer endpoint blueprint
+├── middleware/
+│   ├── logging_middleware.py # Request logging
+│   ├── auth_middleware.py    # Authentication
+│   └── error_handler.py      # Error handling
+├── services/
+│   └── llm_service.py        # Workflow orchestration
+├── repositories/
+│   ├── chat_repository.py    # Chat persistence
+│   └── vector_repository.py  # Vector storage
+├── rag/
+│   └── rag_pipeline.py       # Document processing
+└── README.md
+```
+
+## Production Considerations
+
+### Scalability
+- **Stateless Design**: Each request is independent
+- **Horizontal Scaling**: Multiple service instances possible
+- **Async Processing**: Non-blocking tool execution
+
+### Reliability
+- **Retry Logic**: Bounded retries for transient failures
+- **Error Isolation**: Failures contained within agent workflows
+- **Structured Logging**: Comprehensive observability
+
+### Security
+- **Role-Based Access**: Policy agent enforces permissions
+- **Input Validation**: Query parsing and sanitization
+- **CORS Protection**: Restricted cross-origin access
+
+### Monitoring
+- **Execution Tracing**: Unique IDs for request tracking
+- **Performance Metrics**: Latency measurement per operation
+- **Error Reporting**: Structured error responses
+
+This service demonstrates advanced AI orchestration patterns suitable for enterprise applications requiring deterministic, tool-based AI interactions.
 
     Graph->>Router: execute(state)
     Router-->>Graph: updated state
@@ -240,9 +508,26 @@ genai-service/
     └── rag_pipeline.py       # PDF extraction via pdfplumber
 ```
 
-## Notes for Production
-- The `router_agent` currently uses static tool selection; integrate with a real LLM (GPT-4, etc.) for dynamic routing.
-- `ChatRepository` uses in-memory storage; replace with PostgreSQL or MongoDB for persistence.
-- `agentic_mcp/tools.py` is fully deterministic for reproducible testing; add real business logic for production.
-- Set `debug=False` and configure logging levels appropriately before deploying.
-- CORS is currently restricted to `https://frontend.com`; update origins as needed.
+## Production Considerations
+
+### Scalability
+- **Stateless Design**: Each request is independent
+- **Horizontal Scaling**: Multiple service instances possible
+- **Async Processing**: Non-blocking tool execution
+
+### Reliability
+- **Retry Logic**: Bounded retries for transient failures
+- **Error Isolation**: Failures contained within agent workflows
+- **Structured Logging**: Comprehensive observability
+
+### Security
+- **Role-Based Access**: Policy agent enforces permissions
+- **Input Validation**: Query parsing and sanitization
+- **CORS Protection**: Restricted cross-origin access
+
+### Monitoring
+- **Execution Tracing**: Unique IDs for request tracking
+- **Performance Metrics**: Latency measurement per operation
+- **Error Reporting**: Structured error responses
+
+This service demonstrates advanced AI orchestration patterns suitable for enterprise applications requiring deterministic, tool-based AI interactions.
