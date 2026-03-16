@@ -1,219 +1,205 @@
 # GenAI Backend Application
-
-A production-style backend for a GenAI chat application with RAG support, built with microservices architecture for clear separation of concerns.
-
-## Overview
-
-This project implements a comprehensive GenAI chat system with the following key features:
-- **RESTful API** for chat management with full CRUD operations
-- **Layered architecture** with proper separation of concerns
-- **Database persistence** with ACID transactions and optimized queries
-- **Agentic workflows** using LangGraph for deterministic AI orchestration
-- **Model Context Protocol (MCP)** for tool-based AI interactions
-- **RAG (Retrieval Augmented Generation)** capabilities
-- **Production-ready features** including logging, error handling, authentication, and observability
-
+ 
+A production-style dual-service GenAI chat backend demonstrating enterprise backend engineering with AI system integration.
+ 
+## What This System Does
+ 
+Two microservices with clear separation of concerns:
+ 
+- **Backend Service** (Java / Spring Boot) — JWT authentication, REST API, JPA persistence, BOLA enforcement, request tracing
+- **GenAI Service** (Python / Flask) — LLM inference, LangGraph agentic workflows, MCP tool execution, RAG pipeline
+ 
+They communicate over HTTP. Spring Boot is the authentication boundary. A single `X-Request-Id` flows across both services for end-to-end log correlation.
+ 
+---
+ 
 ## Architecture
-
-The application is split into two main services:
-
-### Backend Service (Java/Spring Boot)
-- **Port**: 8080
-- **Technology**: Spring Boot 3.2.0, Java 17, Spring Data JPA, H2/PostgreSQL
-- **Responsibilities**:
-  - REST API endpoints for chat CRUD operations
-  - User authentication and authorization
-  - Database persistence and transaction management
-  - Orchestration of GenAI service calls
-  - Request/response logging and error handling
-
-### GenAI Service (Python/Flask)
-- **Port**: 5001
-- **Technology**: Flask, LangGraph, Python 3.x
-- **Responsibilities**:
-  - LLM inference and response generation
-  - Agentic workflow orchestration using state machines
-  - MCP tool execution for deterministic operations
-  - RAG pipeline for document processing
-  - Chat history management
-
-## Project Structure
-
+ 
 ```
-genai-backend-app/
-├── backend-service/          # Spring Boot REST API
-│   ├── src/main/java/com/example/backend/
-│   │   ├── controllers/      # REST controllers
-│   │   ├── services/         # Business logic
-│   │   ├── repositories/     # Data access layer
-│   │   ├── models/           # JPA entities
-│   │   ├── dto/              # Data transfer objects
-│   │   ├── config/           # Configuration classes
-│   │   ├── exceptions/       # Global exception handling
-│   │   ├── filters/          # Request filters
-│   │   └── BackendServiceApplication.java
-│   ├── src/main/resources/
-│   │   └── application.yml   # Application configuration
-│   └── pom.xml               # Maven dependencies
-├── genai-service/            # Flask GenAI service
-│   ├── app.py                # Flask application entry point
-│   ├── agentic_mcp/          # LangGraph workflow components
-│   │   ├── graph.py          # StateGraph definition
-│   │   ├── agents.py         # Agent implementations
-│   │   ├── state.py          # State definitions
-│   │   ├── mcp_client.py     # MCP client
-│   │   ├── mcp_server.py    # MCP server blueprint
-│   │   └── tools.py          # Tool registry and implementations
-│   ├── handlers/             # Flask blueprints
-│   ├── middleware/           # Flask middleware
-│   ├── services/             # Business services
-│   ├── repositories/         # Data repositories
-│   ├── rag/                  # RAG pipeline
-│   └── requirements.txt      # Python dependencies
-└── README.md
+Client
+  │
+  ▼
+Spring Boot :8080
+  ├── LoggingFilter      → generates/reuses X-Request-Id, MDC logging
+  ├── AuthFilter         → validates JWT, sets SecurityContext
+  ├── ChatController     → REST endpoints, reads identity from filter
+  ├── ChatService        → business logic, BOLA ownership checks, TX split
+  ├── ChatRepository     → JPA + paginated queries
+  └── LLMClient          → forwards X-Request-Id + X-User-* headers
+          │
+          ▼
+Flask :5001
+  ├── logging_middleware → reuses upstream X-Request-Id (generates fallback UUID if absent)
+  ├── auth_middleware    → reads X-User-Id/Email/Role, defaults role to USER if absent
+  ├── LLMService         → initialises AgentState, invokes LangGraph
+  └── LangGraph StateGraph
+        ├── Router Agent    → selects tool
+        ├── Policy Agent    → checks role (admin/hr only)
+        ├── Executor Agent  → calls MCP tool, max 2 retries
+        └── Formatter Agent → builds structured response
+              │
+              ▼
+        MCP Server /tools/run
+              │
+              ▼
+        Tool Registry (deterministic Python functions)
 ```
-
-## Key Features
-
-### Backend Service Features
-- **REST API Design**: Proper HTTP methods, status codes, and resource modeling
-- **Layered Architecture**: Controllers → Services → Repositories with clear separation
-- **Database Design**: Normalized schema with strategic denormalization for performance
-- **Transaction Management**: ACID compliance for chat creation workflow
-- **Authentication**: Bearer token validation via request filters
-- **Pagination & Sorting**: Efficient data retrieval with Spring Data
-- **Error Handling**: Global exception handler with structured error responses
-- **Logging**: Structured JSON logs with request tracing
-- **CORS Support**: Configurable cross-origin resource sharing
-
-### GenAI Service Features
-- **Agentic Workflows**: Deterministic AI orchestration using LangGraph state machines
-- **MCP Integration**: Tool-based interactions with business logic separation
-- **Multi-Agent System**: Router, Policy, Executor, and Formatter agents
-- **RAG Pipeline**: Document processing and context retrieval
-- **Tool Registry**: Extensible tool system for business operations
-- **State Management**: Typed state definitions for workflow reliability
-- **Error Handling**: Fail-fast design with bounded retries
-
+ 
+---
+ 
+## Key Design Decisions
+ 
+| Decision | Why |
+|---|---|
+| Two services: Java + Python | Java has Spring Security + JPA maturity. Python has LangChain + LangGraph. Each language does what it's best at. |
+| Spring is the auth boundary | Spring Security has battle-tested JWT validation. Flask is internal — it trusts forwarded identity headers. |
+| Stateless JWT — no server sessions | Any instance can serve any request. Enables horizontal scaling without sticky sessions. |
+| HttpOnly cookie for refresh token | localStorage is readable by JS (XSS risk). HttpOnly cookie is not accessible to JavaScript. |
+| Split DB transactions around LLM call | LLM calls take 2–10 seconds. Holding a DB transaction open that long exhausts HikariCP's connection pool. TX1 saves prompt, TX2 saves response. |
+| BOLA check in service layer | Business rules in the service apply regardless of which controller calls the method. Controller-only checks are easily bypassed by new endpoints. |
+| Refresh token hashed with SHA-256 | If DB is leaked, attacker gets hashes, not usable tokens. Same principle as password hashing — never store secrets in plain text. |
+| requestId across both services | One ID ties all logs for a single request across both services. AI backends fail at multiple layers — tracing is essential for debugging. |
+| LangGraph over a chain | Graph expresses branching explicitly: policy fail → skip executor, retry loops, conditional routing. A chain is linear and cannot express this cleanly. |
+| MCP tool boundary | Separates LLM decision ('which tool?') from deterministic execution ('run this function'). Prevents prompt injection from reaching tool execution. |
+ 
+---
+ 
+## Request Flow
+ 
+```
+POST /api/chats  Authorization: Bearer <jwt>
+  │
+  ├── CorsConfig          validates origin, handles preflight
+  ├── LoggingFilter       X-Request-Id added to MDC + request log
+  ├── AuthFilter          JWT validated → userId/email/role → SecurityContext
+  ├── ChatController      reads identity from request attributes
+  ├── ChatService         BOLA check → TX1 save prompt → call LLM → TX2 save response
+  └── LLMClient           forwards X-Request-Id, X-User-Id, X-User-Email, X-User-Role
+          │
+          ▼
+  POST /infer  (Flask)
+    ├── logging_middleware   reuses X-Request-Id (fallback: new UUID)
+    ├── auth_middleware      reads X-User-* headers, defaults role to USER if absent
+    ├── LLMService           AgentState{trace_id, role, query}
+    └── LangGraph            Router → Policy → Executor → Formatter
+          │
+          ▼
+  Structured JSON response with execution_id, trace_id, latency_ms, retry_count
+```
+ 
+---
+ 
 ## Technology Stack
-
-### Backend Service
-- **Framework**: Spring Boot 3.2.0
-- **Language**: Java 17
-- **Database**: H2 (dev) / PostgreSQL (prod)
-- **ORM**: Hibernate/JPA
-- **Security**: Spring Security
-- **Validation**: Jakarta Bean Validation
-- **Logging**: Logback with Logstash encoder
-- **Build Tool**: Maven
-- **Testing**: JUnit 5, Spring Boot Test
-
-### GenAI Service
-- **Framework**: Flask
-- **Language**: Python 3.x
-- **Workflow Engine**: LangGraph
-- **HTTP Client**: Requests
-- **CORS**: Flask-CORS
-- **Document Processing**: PDFPlumber
-- **Environment**: python-dotenv
-
+ 
+| Layer | Technology |
+|---|---|
+| Java backend | Spring Boot 3.2, Spring Security, Spring Data JPA, Hibernate |
+| Database | H2 (dev) / PostgreSQL (prod), HikariCP connection pooling |
+| Auth | JWT (HS256), BCrypt password hashing, HttpOnly refresh cookie |
+| AI service | Python 3.x, Flask, LangGraph, pdfplumber |
+| Workflow | LangGraph StateGraph, MCP (Model Context Protocol) |
+| Observability | MDC structured logging, X-Request-Id tracing across services |
+| Build | Maven (Java), pip + venv (Python) |
+ 
+---
+ 
 ## Quick Start
-
-### Prerequisites
-- Java 17 or higher
-- Python 3.8 or higher
-- Maven 3.8 or higher
-- Git
-
-### Running the Application
-
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd genai-backend-app
-   ```
-
-2. **Start the GenAI Service**
-   ```bash
-   cd genai-service
-   python -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   # Set OPENAI_API_KEY environment variable
-   python app.py
-   ```
-
-3. **Start the Backend Service**
-   ```bash
-   cd ../backend-service
-   mvn clean spring-boot:run
-   ```
-
-### API Testing
-
-Create a chat message:
+ 
+**Prerequisites:** Java 17+, Python 3.8+, Maven 3.8+
+ 
 ```bash
+# 1. Start GenAI Service
+cd genai-service
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+echo "OPENAI_API_KEY=your_key_here" > .env
+python app.py
+ 
+# 2. Start Backend Service
+cd ../backend-service
+mvn clean spring-boot:run
+```
+ 
+> **Note:** There is no registration endpoint yet. A user must be seeded directly into the database before login will work. See Known Gaps.
+ 
+**Login and create a chat:**
+```bash
+# Login (requires a seeded user in the database)
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@example.com", "password": "password"}'
+ 
+# Use the returned access token
 curl -X POST http://localhost:8080/api/chats \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer test-token" \
-  -d '{"userId": "user123", "prompt": "What is AI?"}'
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"prompt": "Check eligibility for employee 123"}'
 ```
-
-Get chat history:
-```bash
-curl -X GET "http://localhost:8080/api/chats?userId=user123" \
-  -H "Authorization: Bearer test-token"
+ 
+---
+ 
+## Security Implementation
+ 
+- `POST /auth/login` → verifies BCrypt password, returns JWT access token + HttpOnly refresh cookie
+- `POST /auth/refresh` → validates hashed refresh token, rotates token pair
+- `POST /auth/logout` → clears cookie, deletes DB token
+- `AuthFilter` → validates JWT on every request, populates SecurityContext
+- `ChatService` → ownership check: `chat.getUser().getId().equals(jwtUserId)` on every read/update/delete
+- `auth_middleware.py` → reads `X-User-*` headers from Spring; defaults role to `USER` if absent
+ 
+---
+ 
+## Request Tracing
+ 
 ```
-
-## Development
-
-### Backend Service Development
-- See `backend-service/README.md` for detailed API documentation
-- Run tests: `mvn test`
-- Build JAR: `mvn clean package`
-- Check code style: Integrated with Spring Boot standards
-
-### GenAI Service Development
-- See `genai-service/README.md` for detailed API documentation
-- Run with debug: `python app.py` (debug=True)
-- Test endpoints using the provided curl examples
-- Add new tools in `agentic_mcp/tools.py`
-
-## Configuration
-
-### Backend Service Configuration
-Key settings in `application.yml`:
-- Database connection (H2 for dev, PostgreSQL for prod)
-- CORS allowed origins
-- GenAI service URL
-- Async thread pool configuration
-- JPA/Hibernate settings
-
-### GenAI Service Configuration
-Environment variables:
-- `OPENAI_API_KEY`: Required for LLM operations
-- Flask configuration through `app.py`
-
-## Deployment
-
-### Backend Service Deployment
-- Build JAR: `mvn clean package`
-- Run: `java -jar target/backend-service-0.0.1-SNAPSHOT.jar`
-- Configure PostgreSQL for production
-- Set up reverse proxy (nginx) for production deployment
-
-### GenAI Service Deployment
-- Use Gunicorn for production: `gunicorn -w 4 app:app`
-- Configure environment variables
-- Set up proper logging and monitoring
-
-## Contributing
-
-1. Follow the existing code structure and naming conventions
-2. Add tests for new features
-3. Update documentation for API changes
-4. Ensure all tests pass before submitting PR
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
+LoggingFilter (Spring)    →  MDC.put("requestId", id)  →  all Spring logs tagged
+LLMClient (Spring)        →  forwards X-Request-Id header to Flask
+logging_middleware.py     →  reuses X-Request-Id if present, else generates fallback UUID
+error_handler.py          →  includes requestId in all error responses
+AgentState.trace_id       →  carries requestId into LangGraph workflow
+```
+ 
+One `requestId` → grep both Spring and Flask logs together.
+ 
+---
+ 
+## Known Gaps
+ 
+| Gap | Next Step |
+|---|---|
+| No user registration endpoint | Add `POST /auth/register` with email validation |
+| No automated tests | JUnit + Mockito for ChatService, @SpringBootTest for auth flow |
+| LangGraph router is deterministic | Replace with LLM-based routing + Pydantic validation |
+| FAISS is in-memory (does not persist) | Replace with pgvector — same PostgreSQL, HNSW index |
+| No RAGAS evaluation | Add `eval/ragas_eval.py` — faithfulness, relevancy, context precision |
+| No LangSmith tracing | 3 env vars: `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT` |
+| LoggingFilter does not measure duration | Add `startTime = System.currentTimeMillis()` before chain, log `elapsed` after |
+ 
+---
+ 
+## Project Structure
+ 
+```
+genai-backend-app/
+├── backend-service/
+│   ├── src/main/java/com/example/backend/
+│   │   ├── controllers/     ChatController, AuthController
+│   │   ├── services/        ChatService, AuthService
+│   │   ├── repositories/    ChatRepository, UserRepository
+│   │   ├── models/          ChatMessage, User, RefreshToken
+│   │   ├── dto/             CreateChatRequest, LoginRequest, UpdateChatRequest
+│   │   ├── config/          SecurityConfig, CorsConfig, AsyncConfig
+│   │   ├── exceptions/      UnauthorizedException, ForbiddenException, ResourceNotFoundException
+│   │   ├── filters/         LoggingFilter, AuthFilter
+│   │   └── BackendServiceApplication.java
+│   └── src/main/resources/application.yml
+├── genai-service/
+│   ├── app.py
+│   ├── agentic_mcp/         graph.py, agents.py, state.py, mcp_client.py, mcp_server.py, tools.py
+│   ├── handlers/            llm_handler.py
+│   ├── middleware/          logging_middleware.py, auth_middleware.py, error_handler.py
+│   ├── services/            llm_service.py
+│   ├── repositories/        chat_repository.py, vector_repository.py
+│   └── rag/                 rag_pipeline.py
+└── README.md
+```

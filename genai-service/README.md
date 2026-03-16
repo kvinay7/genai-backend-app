@@ -1,533 +1,418 @@
 # GenAI Service
 
-A Flask-based microservice that implements agentic AI workflows using LangGraph state machines and Model Context Protocol (MCP) for deterministic tool execution. The service orchestrates multi-agent systems for processing user queries with structured tool-based responses.
+Flask microservice for LLM inference, LangGraph agentic workflows, MCP tool execution, and RAG pipeline. Spring Boot is the authentication boundary - this service consumes forwarded identity, it does not validate JWTs.
 
-## Overview
+---
 
-This service provides AI-powered query processing through a sophisticated agentic architecture:
-- **Multi-Agent Orchestration**: Router, Policy, Executor, and Formatter agents
-- **State Machine Workflows**: Deterministic execution using LangGraph
-- **Tool-Based Interactions**: MCP protocol for business logic execution
-- **RAG Capabilities**: Document processing and context retrieval
-- **Production-Ready Features**: Structured logging, error handling, observability
+## What This Service Owns
+
+| Responsibility | Implementation |
+|---|---|
+| Identity consumption | Reads `X-User-Id`, `X-User-Email`, `X-User-Role` from Spring Boot; defaults role to `USER` if absent |
+| Request tracing | Reuses `X-Request-Id` from upstream if present; generates fallback UUID if absent |
+| Agentic workflow | LangGraph StateGraph: Router -> Policy -> Executor -> Formatter |
+| Tool execution | MCP server exposing deterministic tool registry |
+| RAG pipeline | PDF loading, chunking, embedding, vector retrieval |
+| Chat persistence | In-memory chat repository (upgrade path: PostgreSQL) |
+
+---
 
 ## Architecture
 
-### Core Components
+```text
+POST /infer  (called by Spring Boot LLMClient)
+  |
+  |-- logging_middleware    reuses X-Request-Id if present; else generates UUID
+  |-- auth_middleware       reads X-User-Id/Email/Role; defaults role to USER if absent
+  |-- llm_handler.py        validates prompt, calls LLMService
+  |-- LLMService            builds AgentState, invokes compiled graph
+  |
+  `-- LangGraph StateGraph
+        |-- Router Agent     -> selects tool based on query
+        |-- Policy Agent     -> checks role: admin/hr pass, others -> error path
+        |-- Executor Agent   -> calls MCPClient, max 2 retries on failure
+        `-- Formatter Agent  -> builds structured response with metadata
+              |
+              v
+        POST /tools/run (MCP Server)
+              |
+              v
+        TOOL_REGISTRY[tool_name](payload)   // deterministic Python function
+```
 
-#### Agentic MCP Package (`agentic_mcp/`)
-The heart of the service implementing the agentic workflow system:
+---
 
-**State Management (`state.py`)**:
+## Middleware - Actual Behavior
+
+### `logging_middleware.py`
+
+```python
+# Reuses X-Request-Id from upstream header.
+# If the header is absent (e.g. direct call bypassing Spring), generates a new UUID.
+request_id = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+g.request_id = request_id
+```
+
+The fallback UUID generation means trace continuity is preserved when called from Spring, but a direct call to Flask gets its own isolated trace ID.
+
+### `auth_middleware.py`
+
+```python
+# auth_middleware.py - actual behavior
+user_id = request.headers.get("X-User-Id")
+user_email = request.headers.get("X-User-Email")
+user_role = request.headers.get("X-User-Role", "USER")
+
+if not user_id or not user_email:
+    abort(401, description="Missing upstream identity headers")
+
+g.user_id = user_id
+g.user_email = user_email
+g.user_role = user_role
+```
+
+`X-User-Id` and `X-User-Email` are required - missing either aborts with `401`. `X-User-Role` is optional - defaults to `USER`, which the Policy agent will reject for tool operations requiring `admin` or `hr`.
+
+### `error_handler.py`
+
+```python
+# Error responses include requestId but not a timestamp field.
+return jsonify({
+    "error": "Internal Server Error",
+    "requestId": getattr(g, "request_id", "n/a"),
+}), 500
+```
+
+---
+
+## Why Flask is Not the Auth Boundary
+
+This service is internal - it only receives calls from Spring Boot's `LLMClient`. Spring has already validated the JWT before forwarding the request. Flask trusts the forwarded identity headers.
+
+**Why not validate JWT in Flask too?**
+Double validation adds latency and duplicates auth logic. In a microservice architecture, the edge service (Spring Boot) authenticates. Internal services consume the verified identity. Flask should never be directly accessible by clients - only by Spring Boot.
+
+---
+
+## LangGraph State Machine
+
+### AgentState
+
 ```python
 class AgentState(TypedDict):
-    execution_id: str
-    trace_id: str
-    role: str
-    query: str
-    intent: Optional[str]
-    selected_tool: Optional[str]
-    tool_result: Optional[Dict]
-    retry_count: int
-    error: Optional[str]
-    response: Optional[Dict]
-    latency_ms: Optional[int]
+    execution_id:  str             # UUID for this workflow run
+    trace_id:      str             # X-Request-Id from Spring - ties to Spring logs
+    role:          str             # from X-User-Role header (default: USER)
+    query:         str             # user prompt
+    intent:        Optional[str]   # tool name selected by Router
+    selected_tool: Optional[str]   # confirmed tool for Executor
+    tool_result:   Optional[Dict]  # result from MCP tool
+    retry_count:   int             # Executor retry counter
+    error:         Optional[str]   # error message if any agent failed
+    response:      Optional[Dict]  # final formatted response
+    latency_ms:    Optional[int]   # total workflow execution time
 ```
 
-**Workflow Graph (`graph.py`)**:
-- **Router Agent**: Analyzes queries and selects appropriate tools
-- **Policy Agent**: Enforces role-based access control (admin/hr only)
-- **Executor Agent**: Executes tools with retry logic (max 2 retries)
-- **Formatter Agent**: Structures final responses with metadata
+### Graph Definition
 
-**Agent Implementations (`agents.py`)**:
-- Deterministic tool selection and execution
-- Error handling and retry mechanisms
-- Structured response formatting
-- Performance monitoring with latency tracking
-
-**MCP Integration (`mcp_client.py`, `mcp_server.py`)**:
-- HTTP client for tool execution
-- Flask blueprint exposing tool registry
-- Standardized tool calling interface
-
-**Tool Registry (`tools.py`)**:
-- `eligibility_check`: Validates employee eligibility (age ≥21, tenure ≥2)
-- `get_employee_age`: Retrieves employee age information
-- Mock employee database for demonstration
-
-#### Service Layer (`services/`)
-**LLMService (`llm_service.py`)**:
-- Orchestrates the complete agentic workflow
-- Manages chat persistence and retrieval
-- Integrates with repositories for data storage
-- Provides unified interface for query processing
-
-#### Repository Layer (`repositories/`)
-**ChatRepository (`chat_repository.py`)**:
-- In-memory storage for chat sessions
-- CRUD operations for chat messages
-- User-specific chat retrieval
-
-**VectorRepository (`vector_repository.py`)**:
-- Vector embeddings for RAG functionality
-- Context retrieval from document collections
-
-#### RAG Pipeline (`rag/`)
-**RAGPipeline (`rag_pipeline.py`)**:
-- PDF document processing using pdfplumber
-- Text extraction and chunking
-- Integration with vector storage
-
-### Middleware Stack (`middleware/`)
-- **LoggingMiddleware**: Request/response logging with correlation IDs
-- **AuthMiddleware**: User context injection and authentication
-- **ErrorHandler**: Global exception handling and structured error responses
-
-### Flask Application (`app.py`)
-- Blueprint registration for modular routing
-- CORS configuration for cross-origin requests
-- Middleware application order
-- Development vs production configuration
-
-## Agentic Workflow
-
-### State Machine Flow
-
-```mermaid
-flowchart TD
-    A[Start] --> R[Router Agent]
-    R --> P{Policy Check}
-    P -->|Fail| F[Formatter Agent]
-    P -->|Pass| E[Executor Agent]
-    E --> C{Call Tool}
-    C --> S{Success?}
-    S -->|No| RT{Retry Count < 2?}
-    RT -->|Yes| E
-    RT -->|No| F
-    S -->|Yes| F
-    F --> END[End]
-```
-
-### Agent Responsibilities
-
-#### 1. Router Agent
-- **Input**: Raw user query
-- **Processing**: Tool selection logic (currently deterministic)
-- **Output**: Selected tool intent
-- **Error Handling**: Invalid tool selection
-
-#### 2. Policy Agent
-- **Input**: User role from request context
-- **Processing**: Role-based access control
-- **Output**: Authorization decision
-- **Roles**: admin, hr (authorized), others (denied)
-
-#### 3. Executor Agent
-- **Input**: Selected tool and query
-- **Processing**: MCP tool execution with retry logic
-- **Output**: Tool results or error state
-- **Retry Logic**: Maximum 2 retries on failure
-
-#### 4. Formatter Agent
-- **Input**: Final state (success or error)
-- **Processing**: Structured response formatting
-- **Output**: Standardized JSON response with metadata
-
-## Technology Stack
-
-- **Framework**: Flask 2.x
-- **Workflow Engine**: LangGraph
-- **Language**: Python 3.8+
-- **HTTP Client**: Requests
-- **Document Processing**: pdfplumber
-- **Environment Management**: python-dotenv
-- **CORS**: Flask-CORS
-
-## Dependencies
-
-```
-flask==2.3.3
-flask-cors==4.0.0
-langgraph==0.0.32
-requests==2.31.0
-pdfplumber==0.10.3
-python-dotenv==1.0.0
-```
-
-## Configuration
-
-### Environment Variables
-```bash
-# Required for LLM operations (if integrated)
-OPENAI_API_KEY=your_api_key_here
-
-# Flask configuration
-FLASK_ENV=development
-FLASK_DEBUG=True
-```
-
-### Application Configuration
-- **CORS Origins**: Restricted to `https://frontend.com`
-- **Debug Mode**: Enabled for development
-- **Port**: 5001 (configurable)
-
-## API Endpoints
-
-### POST `/infer` - Main Query Processing
-Orchestrates the complete agentic workflow for user queries.
-
-**Request**:
-```bash
-curl -X POST http://localhost:5001/infer \
-  -H "Content-Type: application/json" \
-  -d '{"prompt": "Check eligibility for employee 123"}'
-```
-
-**Response**:
-```json
-{
-  "response": {
-    "execution_id": "uuid-123",
-    "status": "success",
-    "data": {
-      "status": "success",
-      "eligible": true,
-      "reason": "Meets criteria"
-    },
-    "metadata": {
-      "intent": "eligibility_check",
-      "role": "admin",
-      "latency_ms": 45,
-      "retry_count": 0,
-      "trace_id": "uuid-456"
-    }
-  }
-}
-```
-
-### POST `/tools/run` - Direct Tool Execution
-Exposes the MCP tool registry for direct tool invocation.
-
-**Supported Tools**:
-- `eligibility_check`: Validates employee eligibility criteria
-- `get_employee_age`: Retrieves employee age information
-
-**Request**:
-```bash
-curl -X POST http://localhost:5001/tools/run \
-  -H "Content-Type: application/json" \
-  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
-```
-
-**Response**:
-```json
-{
-  "status": "success",
-  "eligible": true,
-  "reason": "Meets criteria"
-}
-```
-
-## Tool Registry
-
-### Eligibility Check Tool
-**Purpose**: Determine if an employee meets eligibility criteria
-**Criteria**: Age ≥ 21 AND Tenure ≥ 2 years
-**Input**: Employee ID (extracted from query)
-**Output**: Eligibility status with reason
-
-### Employee Age Tool
-**Purpose**: Retrieve employee age information
-**Input**: Employee ID (extracted from query)
-**Output**: Employee age or null if not found
-
-### Mock Database
 ```python
-EMPLOYEE_DB = {
-    "123": {"age": 30, "tenure": 5},  # Eligible
-    "456": {"age": 20, "tenure": 1},  # Not eligible
-}
-```
+# graph.py
+graph = StateGraph(AgentState)
 
-## Data Flow
+graph.add_node("router", router_agent)
+graph.add_node("policy", policy_agent)
+graph.add_node("executor", executor_agent)
+graph.add_node("formatter", formatter_agent)
 
-### End-to-End Request Processing
+graph.set_entry_point("router")
 
-1. **Client Request** → POST `/infer` with user prompt
-2. **Middleware** → Logging, authentication, user context injection
-3. **LLMService** → Initialize workflow with execution/trace IDs
-4. **LangGraph** → Execute agentic state machine:
-   - Router → Select appropriate tool
-   - Policy → Validate user permissions
-   - Executor → Call MCP tool with retries
-   - Formatter → Structure final response
-5. **Repository** → Persist chat history
-6. **Response** → Structured JSON with metadata
-
-### Error Handling
-
-- **Router Errors**: Invalid tool selection
-- **Policy Errors**: Unauthorized access (non-admin/hr roles)
-- **Executor Errors**: Tool execution failures with retry logic
-- **Formatter Errors**: Structured error responses with trace information
-
-## Development Setup
-
-### Prerequisites
-- Python 3.8 or higher
-- pip package manager
-
-### Installation
-```bash
-cd genai-service
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-pip install -r requirements.txt
-```
-
-### Environment Setup
-```bash
-# Create .env file
-echo "OPENAI_API_KEY=your_key_here" > .env
-```
-
-### Running Locally
-```bash
-python app.py
-# Service starts on http://localhost:5001
-```
-
-### Testing Tools
-```bash
-# Test eligibility check
-curl -X POST http://localhost:5001/tools/run \
-  -H "Content-Type: application/json" \
-  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
-
-# Test age retrieval
-curl -X POST http://localhost:5001/tools/run \
-  -H "Content-Type: application/json" \
-  -d '{"tool": "get_employee_age", "payload": {"query": "employee 456"}}'
-```
-
-## Project Structure
-
-```
-genai-service/
-├── app.py                      # Flask application entry point
-├── llm_config.py              # LLM client configuration
-├── requirements.txt           # Python dependencies
-├── agentic_mcp/               # Core agentic workflow package
-│   ├── __init__.py
-│   ├── graph.py              # LangGraph state machine
-│   ├── state.py              # AgentState type definitions
-│   ├── agents.py             # Agent implementations
-│   ├── mcp_client.py         # MCP HTTP client
-│   ├── mcp_server.py        # MCP Flask blueprint
-│   └── tools.py              # Tool registry and implementations
-├── handlers/
-│   └── llm_handler.py        # /infer endpoint blueprint
-├── middleware/
-│   ├── logging_middleware.py # Request logging
-│   ├── auth_middleware.py    # Authentication
-│   └── error_handler.py      # Error handling
-├── services/
-│   └── llm_service.py        # Workflow orchestration
-├── repositories/
-│   ├── chat_repository.py    # Chat persistence
-│   └── vector_repository.py  # Vector storage
-├── rag/
-│   └── rag_pipeline.py       # Document processing
-└── README.md
-```
-
-## Production Considerations
-
-### Scalability
-- **Stateless Design**: Each request is independent
-- **Horizontal Scaling**: Multiple service instances possible
-- **Async Processing**: Non-blocking tool execution
-
-### Reliability
-- **Retry Logic**: Bounded retries for transient failures
-- **Error Isolation**: Failures contained within agent workflows
-- **Structured Logging**: Comprehensive observability
-
-### Security
-- **Role-Based Access**: Policy agent enforces permissions
-- **Input Validation**: Query parsing and sanitization
-- **CORS Protection**: Restricted cross-origin access
-
-### Monitoring
-- **Execution Tracing**: Unique IDs for request tracking
-- **Performance Metrics**: Latency measurement per operation
-- **Error Reporting**: Structured error responses
-
-This service demonstrates advanced AI orchestration patterns suitable for enterprise applications requiring deterministic, tool-based AI interactions.
-
-    Graph->>Router: execute(state)
-    Router-->>Graph: updated state
-
-    Graph->>Policy: execute(state)
-    Policy-->>Graph: updated state
-
-    Graph->>Executor: execute(state)
-
-    Executor->>MCPClient: run_tool(intent)
-    MCPClient->>MCPServer: POST /tools/run
-    MCPServer->>Tool: execute business logic
-    Tool-->>MCPServer: JSON result
-    MCPServer-->>MCPClient: JSON result
-    MCPClient-->>Executor: tool_result
-
-    Executor-->>Graph: updated state
-
-    Graph->>Formatter: execute(state)
-    Formatter-->>Graph: final response
-
-    Graph-->>Service: final state
-    Service-->>Handler: structured JSON
-    Handler-->>Client: HTTP response
-```
-
-## Quickstart (Run Locally)
-
-### Setup
-```bash
-cd genai-service
-python -m venv venv
-
-# Windows
-venv\Scripts\activate
-
-# macOS/Linux
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### Environment Variables
-Create a `.env` file in the `genai-service` directory:
-```
-OPENAI_API_KEY=your_api_key_here
-```
-
-### Run the Service
-```bash
-python app.py
-```
-The service starts on `http://localhost:5001`
-
-## API Endpoints
-
-### POST `/infer` — Main Query Processing
-Receive a prompt, orchestrate the 4-stage workflow, return structured response.
-
-**Request:**
-```bash
-curl -X POST http://localhost:5001/infer \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Check eligibility for employee 123"}'
-```
-
-**Response:**
-```json
-{
-  "response": {
-    "execution_id": "uuid",
-    "trace_id": "uuid",
-    "tool_result": {
-      "status": "success",
-      "eligible": true,
-      "reason": "Meets criteria"
+graph.add_conditional_edges(
+    "router",
+    lambda s: "error" if s.get("error") else "ok",
+    {
+        "error": "formatter",
+        "ok": "policy",
     },
-    "latency_ms": 45
-  }
-}
+)
+
+graph.add_conditional_edges(
+    "policy",
+    lambda s: "error" if s.get("error") else "ok",
+    {
+        "error": "formatter",
+        "ok": "executor",
+    },
+)
+
+graph.add_conditional_edges(
+    "executor",
+    lambda s: "retry" if s.get("error") and s.get("retry_count", 0) < 2 else "done",
+    {
+        "retry": "executor",
+        "done": "formatter",
+    },
+)
+
+graph.add_edge("formatter", END)
+compiled = graph.compile()
 ```
 
-### POST `/tools/run` — MCP Tool Execution
-Direct tool invocation endpoint (used internally by executor agent).
+### Why LangGraph over a chain?
 
-**Supported Tools:**
-- `eligibility_check` — checks if employee meets age (≥21) and tenure (≥2 yrs) criteria
-- `get_employee_age` — retrieves employee age from EMPLOYEE_DB
+A LangChain chain is linear: `prompt | llm | parser`. The workflow here requires:
+- **Branching**: policy failure skips executor entirely
+- **Retry loops**: executor retries up to 2 times on tool failure
+- **State accumulation**: each node reads and updates shared typed state
 
-**Request:**
-```bash
-curl -X POST http://localhost:5001/tools/run \
-  -H "Content-Type: application/json" \
-  -d '{"tool":"eligibility_check","payload":{"query":"employee 123"}}'
+A graph expresses all of this explicitly. The control flow is visible, testable, and debuggable.
+
+---
+
+## Agent Implementations
+
+### Router Agent
+**Input:** `query` from state  
+**Output:** sets `intent` and `selected_tool`  
+**Current:** deterministic string matching  
+**Next step:** LLM-based routing - prompt with `query + tool_list`, parse JSON response with Pydantic `RouterDecision(tool: str, confidence: float)`
+
+### Policy Agent
+**Input:** `role` from state  
+**Output:** passes or sets `error` in state
+
+```python
+AUTHORIZED_ROLES = {"admin", "hr"}
+
+def policy_agent(state: AgentState) -> AgentState:
+    if state["role"] not in AUTHORIZED_ROLES:
+        return {**state, "error": "Unauthorized access"}
+    return state
 ```
 
-**Response:**
-```json
+Default role is `USER` (set by auth_middleware when header is absent). `USER` is not in `AUTHORIZED_ROLES` - so any request without an explicit admin/hr role will be rejected at the Policy node.
+
+### Executor Agent
+**Input:** `selected_tool`, `query`, `retry_count`  
+**Output:** sets `tool_result` or increments `retry_count` + sets `error`
+
+```python
+def executor_agent(state: dict) -> dict:
+    if state.get("error") and state.get("retry_count", 0) >= 2:
+        return state
+
+    tool = state.get("selected_tool")
+    if not tool:
+        state["error"] = "No tool selected"
+        return state
+
+    result = mcp.call_tool(tool, {"query": state.get("query")})
+    if "error" in result:
+        state["retry_count"] = state.get("retry_count", 0) + 1
+        state["error"] = result["error"]
+    else:
+        state.pop("error", None)
+        state["tool_result"] = result
+
+    return state
+```
+
+### Formatter Agent
+**Input:** entire final state  
+**Output:** structured JSON response with metadata
+
+```python
 {
-  "status": "success",
-  "eligible": true,
-  "reason": "Meets criteria"
+    "execution_id": state["execution_id"],
+    "trace_id": state["trace_id"],
+    "status": "success" or "failed",
+    "data": state.get("tool_result"),
+    "metadata": {
+        "intent": state.get("intent"),
+        "role": state["role"],
+        "latency_ms": state.get("latency_ms"),
+        "retry_count": state["retry_count"]
+    }
 }
 ```
 
-### Mock Employee Database
-Located in `agentic_mcp/tools.py`:
+`trace_id` in the response lets the caller correlate this workflow run with Spring Boot logs using a single ID.
+
+---
+
+## MCP - Model Context Protocol
+
+### What Problem MCP Solves
+
+Without MCP, an LLM deciding which function to call could be manipulated by prompt injection. With MCP, the LLM can only select from named tools in `TOOL_REGISTRY`. Undeclared functions cannot be reached.
+
+```text
+LLM decision  ->  tool name (string)
+     |
+     v
+MCPClient.run_tool(tool_name, payload)
+     |
+     v
+POST /tools/run  {tool: "eligibility_check", payload: {...}}
+     |
+     v
+MCPServer looks up TOOL_REGISTRY[tool_name]
+     |
+     v
+Deterministic Python function executes
+     |
+     v
+JSON result returned
 ```
+
+```python
+# tools.py
+TOOL_REGISTRY = {
+    "eligibility_check": check_eligibility,
+    "get_employee_age": get_employee_age,
+}
+
 EMPLOYEE_DB = {
     "123": {"age": 30, "tenure": 5},
     "456": {"age": 20, "tenure": 1},
 }
 ```
 
-## Project Structure
-```
-genai-service/
-├── app.py                      # Flask entry point, blueprints & middleware
-├── llm_config.py              # LLMClient config (OpenAI API)
-├── requirements.txt           # Python dependencies
-├── agentic_mcp/
-│   ├── graph.py              # LangGraph StateGraph + build_graph()
-│   ├── state.py              # AgentState TypedDict definition
-│   ├── agents.py             # 4 agents: router, policy, executor, formatter
-│   ├── mcp_client.py         # HTTP client for /tools/run calls
-│   ├── mcp_server.py         # Flask blueprint with /tools/run route
-│   └── tools.py              # TOOL_REGISTRY, EMPLOYEE_DB, tool implementations
-├── handlers/
-│   └── llm_handler.py        # /infer blueprint & endpoint
-├── middleware/
-│   ├── logging_middleware.py # Request/response logging
-│   ├── auth_middleware.py    # User context injection (g.user_id)
-│   └── error_handler.py      # Global exception handlers
-├── services/
-│   └── llm_service.py        # LLMService (graph orchestration, persistence)
-├── repositories/
-│   ├── chat_repository.py    # In-memory chat storage (CRUD)
-│   └── vector_repository.py  # Vector embeddings (optional RAG)
-└── rag/
-    └── rag_pipeline.py       # PDF extraction via pdfplumber
+---
+
+## RAG Pipeline
+
+```python
+# rag_pipeline.py
+class RAGPipeline:
+    def process_document(self, pdf_path: str):
+        text = self._extract_pdf(pdf_path)
+        chunks = self._chunk_text(text, chunk_size=800, overlap=150)
+        embeddings = self._embed(chunks)
+        self.vector_repo.store(chunks, embeddings)
+
+    def retrieve(self, query: str, k: int = 5) -> list[str]:
+        query_embedding = self._embed([query])[0]
+        return self.vector_repo.search(query_embedding, k=k)
 ```
 
-## Production Considerations
+**Why overlap=150?** Without overlap, a sentence split across two chunks loses context at the boundary. Overlap helps preserve continuity.
 
-### Scalability
-- **Stateless Design**: Each request is independent
-- **Horizontal Scaling**: Multiple service instances possible
-- **Async Processing**: Non-blocking tool execution
+**Current vector store:** FAISS (in-memory). Does not persist across restarts.  
+**Upgrade path:** pgvector - `vector(1536)` column in PostgreSQL, HNSW index for cosine similarity.
 
-### Reliability
-- **Retry Logic**: Bounded retries for transient failures
-- **Error Isolation**: Failures contained within agent workflows
-- **Structured Logging**: Comprehensive observability
+---
 
-### Security
-- **Role-Based Access**: Policy agent enforces permissions
-- **Input Validation**: Query parsing and sanitization
-- **CORS Protection**: Restricted cross-origin access
+## API Endpoints
 
-### Monitoring
-- **Execution Tracing**: Unique IDs for request tracking
-- **Performance Metrics**: Latency measurement per operation
-- **Error Reporting**: Structured error responses
+### `POST /infer`
 
-This service demonstrates advanced AI orchestration patterns suitable for enterprise applications requiring deterministic, tool-based AI interactions.
+```bash
+curl -X POST http://localhost:5001/infer \
+  -H "Content-Type: application/json" \
+  -H "X-Request-Id: uuid-from-spring" \
+  -H "X-User-Id: 42" \
+  -H "X-User-Email: user@example.com" \
+  -H "X-User-Role: admin" \
+  -d '{"prompt": "Check eligibility for employee 123"}'
+```
+
+Response:
+
+```json
+{
+  "requestId": "uuid-from-spring",
+  "response": {
+    "id": 1,
+    "user_id": "42",
+    "prompt": "Check eligibility for employee 123",
+    "response": {
+      "execution_id": "uuid",
+      "status": "success",
+      "data": {
+        "status": "success",
+        "eligible": true,
+        "reason": "Meets criteria"
+      },
+      "metadata": {
+        "intent": "eligibility_check",
+        "role": "admin",
+        "latency_ms": 45,
+        "retry_count": 0,
+        "trace_id": "uuid-from-spring"
+      }
+    },
+    "created_at": "2026-03-16T16:00:00",
+    "trace_id": "uuid-from-spring"
+  }
+}
+```
+
+### `POST /tools/run`
+
+```bash
+curl -X POST http://localhost:5001/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
+```
+
+Response:
+
+```json
+{
+  "status": "success",
+  "eligible": true,
+  "reason": "Meets criteria"
+}
+```
+
+---
+
+## File Guide
+
+| File | What it does | Key interview point |
+|---|---|---|
+| `state.py` | AgentState TypedDict | Shared typed state object. `trace_id` = upstream requestId. `role` defaults to USER if header absent. |
+| `graph.py` | StateGraph definition | `add_node`, `add_conditional_edges`, `compile()`. Explicit control flow instead of implicit callbacks. |
+| `agents.py` | 4 agent functions | Pure functions: state in, updated state out. Policy checks role. Executor retries up to 2 times. |
+| `mcp_client.py` | HTTP client for tools | Sends POST `/tools/run`. Decouples executor logic from tool implementation. |
+| `mcp_server.py` | Flask blueprint | Receives `/tools/run`, looks up `TOOL_REGISTRY`, executes function. |
+| `tools.py` | Tool implementations | Deterministic Python. LLM selects tool name - it does not run the code. |
+| `llm_service.py` | Workflow orchestration | Builds AgentState with trace_id + role from `g` context. Invokes compiled graph. Persists chat. |
+| `auth_middleware.py` | Identity injection | Reads `X-User-*` headers into `g.user_id`, `g.user_email`, `g.user_role`. Aborts 401 if user_id or user_email missing. |
+| `logging_middleware.py` | Trace ID handling | Reuses `X-Request-Id` if present. Generates fallback UUID if absent. |
+| `error_handler.py` | Structured errors | All errors include requestId. No timestamp field currently. |
+| `rag_pipeline.py` | Document processing | PDF -> pdfplumber -> chunk -> embed -> FAISS store -> cosine retrieval. |
+
+---
+
+## Known Gaps
+
+| Gap | Next Step |
+|---|---|
+| LangGraph router is deterministic | Replace with LLM call + structured router output |
+| FAISS is in-memory | Replace with pgvector + HNSW index |
+| No RAGAS evaluation | Add evaluation script for faithfulness/relevancy/context precision |
+| No LangSmith tracing | Add `LANGCHAIN_TRACING_V2`, API key, and project config |
+| No prompt injection guard | Add regex/blocklist or prompt-hardening layer before routing |
+| No PII masking | Add masking before model/tool calls |
+| `error_handler.py` has no timestamp | Add `"timestamp": datetime.utcnow().isoformat()` |
+
+---
+
+## Running Locally
+
+```bash
+cd genai-service
+python -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+echo "OPENAI_API_KEY=your_key_here" > .env
+python app.py
+```
+
+```bash
+# Test tool directly
+curl -X POST http://localhost:5001/tools/run \
+  -H "Content-Type: application/json" \
+  -d '{"tool": "eligibility_check", "payload": {"query": "employee 123"}}'
+```

@@ -1,14 +1,7 @@
 package com.example.backend.dto;
 
-import jakarta.validation.constraints.NotBlank;
-
 public record UpdateChatRequest(
-    
-    Long id,
-
-    @NotBlank(message = "prompt is required")
-    String prompt,
-    
-    @NotBlank(message = "response is required")
-    String response
-) {}
+        String prompt,
+        String response
+) {
+}

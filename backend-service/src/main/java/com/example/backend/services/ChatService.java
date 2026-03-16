@@ -1,14 +1,14 @@
 package com.example.backend.services;
 
+import com.example.backend.exceptions.ForbiddenException;
+import com.example.backend.exceptions.ResourceNotFoundException;
 import com.example.backend.models.ChatMessage;
 import com.example.backend.models.User;
 import com.example.backend.repositories.ChatRepository;
-import com.example.backend.repositories.ChatSpecifications;
 import com.example.backend.repositories.UserRepository;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
@@ -24,52 +24,76 @@ public class ChatService {
     @Autowired
     private LLMClient llmClient;
 
-    public Page<ChatMessage> getChats(String userEmail, Pageable pageable) {
-        User user = userRepository.findByEmail(userEmail).orElse(null);
-        if (user == null) return Page.empty();
-        Specification<ChatMessage> spec = ChatSpecifications.byUser(user);
-        return chatRepository.findAll(spec, pageable);
+    private ChatMessage getOwnedChat(Long chatId, Long requestingUserId) {
+        ChatMessage chat = chatRepository.findById(chatId)
+                .orElseThrow(() -> new ResourceNotFoundException("Chat not found"));
+
+        if (!chat.getUser().getId().equals(requestingUserId)) {
+            throw new ForbiddenException("Access denied");
+        }
+
+        return chat;
     }
 
-    public ChatMessage getChatById(Long id) {
-        return chatRepository.findById(id).orElse(null);
+    public Page<ChatMessage> getChatsForUser(Long userId, Pageable pageable) {
+        return chatRepository.findByUserId(userId, pageable);
     }
 
-    // Step 1: Save prompt and commit immediately — release DB connection
+    public ChatMessage getChat(Long chatId, Long userId) {
+        return getOwnedChat(chatId, userId);
+    }
+
     @Transactional(isolation = Isolation.READ_COMMITTED)
-    public ChatMessage savePendingChat(String userEmail, String prompt) {
-        User user = userRepository.findByEmail(userEmail)
-                .orElseGet(() -> userRepository.save(new User(userEmail, "User")));
+    public ChatMessage savePendingChat(Long userId, String prompt) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+
         ChatMessage msg = new ChatMessage(user, prompt, null);
         return chatRepository.save(msg);
-        // Transaction commits here — DB connection returned to pool
     }
 
-    // Step 2: Save response in a separate transaction after LLM call
     @Transactional(isolation = Isolation.READ_COMMITTED)
     public ChatMessage updateChatResponse(Long chatId, String response) {
         ChatMessage msg = chatRepository.findById(chatId)
-                .orElseThrow(() -> new RuntimeException("Chat not found"));
+                .orElseThrow(() -> new ResourceNotFoundException("Chat not found"));
         msg.setResponse(response);
         return chatRepository.save(msg);
-        // Transaction commits here
     }
 
-    // Orchestrator — no @Transactional here
-    public ChatMessage createChat(String userEmail, String prompt) {
-        ChatMessage msg = savePendingChat(userEmail, prompt);  // TX 1 — commits fast
-        String response = llmClient.infer(prompt);             // LLM call — no DB lock
-        return updateChatResponse(msg.getId(), response);      // TX 2 — commits fast
+    public ChatMessage createChat(Long userId, String userEmail, String role, String requestId, String prompt) {
+        ChatMessage msg = savePendingChat(userId, prompt);
+        String response = llmClient.infer(prompt, userId, userEmail, role, requestId);
+        return updateChatResponse(msg.getId(), response);
     }
 
-    public void deleteChat(Long id) {
-        chatRepository.deleteById(id);
-    }
-
-    public void deleteChatsByUserId(String userEmail) {
-        User user = userRepository.findByEmail(userEmail).orElse(null);
-        if (user != null) {
-            chatRepository.deleteAll(user.getChats());
+    @Transactional(isolation = Isolation.READ_COMMITTED)
+    public ChatMessage updateChat(Long chatId, Long userId, String prompt, String response) {
+        ChatMessage chat = getOwnedChat(chatId, userId);
+        if (prompt != null && !prompt.isBlank()) {
+            chat.setPrompt(prompt);
         }
+        if (response != null && !response.isBlank()) {
+            chat.setResponse(response);
+        }
+        return chatRepository.save(chat);
+    }
+
+    @Transactional
+    public void deleteChat(Long chatId, Long userId, String role) {
+        if ("ADMIN".equals(role)) {
+            chatRepository.deleteById(chatId);
+            return;
+        }
+
+        chatRepository.delete(getOwnedChat(chatId, userId));
+    }
+
+    @Transactional
+    public void deleteAllChatsForUser(Long requestedUserId, Long requestingUserId, String role) {
+        if (!requestedUserId.equals(requestingUserId) && !"ADMIN".equals(role)) {
+            throw new ForbiddenException("Access denied");
+        }
+
+        chatRepository.deleteByUserId(requestedUserId);
     }
 }

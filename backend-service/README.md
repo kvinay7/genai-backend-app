@@ -1,386 +1,440 @@
 # Backend Service
-
-A production-oriented Spring Boot REST API service demonstrating enterprise-grade backend development practices, with emphasis on layered architecture, REST API design, and relational database design.
-
-## Overview
-
-This service provides a comprehensive REST API for chat message management in a GenAI application. It implements industry best practices for:
-- **Layered Architecture** with clear separation of concerns
-- **REST API Design** following HTTP standards and resource modeling
-- **Database Design** with ACID transactions and optimized schemas
-- **Enterprise Features** including authentication, logging, error handling, and observability
-
-## Architecture Overview
-
-### Layered Architecture Pattern
-
-The application follows a strict layered architecture that promotes maintainability, testability, and scalability:
-
+ 
+Spring Boot REST API — authentication boundary, chat management, JPA persistence, and request orchestration for the GenAI backend application.
+ 
+---
+ 
+## What This Service Owns
+ 
+| Responsibility | Implementation |
+|---|---|
+| User authentication | JWT generation + validation, BCrypt password hashing, refresh token rotation |
+| Authorization | BOLA ownership checks in service layer, RBAC via JWT role claim |
+| REST API | CRUD for chat messages — `GET /api/chats`, `POST`, `PUT`, `DELETE` |
+| Persistence | Spring Data JPA + Hibernate, normalized schema, HikariCP connection pooling |
+| Transaction management | Split TX: save prompt → LLM call → save response (keeps transactions short) |
+| Tracing | MDC `requestId`, forwarded to Flask as `X-Request-Id` header |
+| Error handling | Structured error responses — 401, 403, 404, 400, 500 with timestamp + requestId |
+ 
+---
+ 
+## Request Processing Pipeline
+ 
+Every request passes through this pipeline in order:
+ 
 ```
-┌─────────────────┐
-│   Controllers   │ ← HTTP Layer (REST API)
-└─────────────────┘
-         │
-┌─────────────────┐
-│    Services     │ ← Business Logic Layer
-└─────────────────┘
-         │
-┌─────────────────┐
-│  Repositories   │ ← Data Access Layer
-└─────────────────┘
-         │
-┌─────────────────┐
-│     Models      │ ← Domain Layer (JPA Entities)
-└─────────────────┘
+1. CorsConfig          → validates origin, handles OPTIONS preflight
+2. LoggingFilter       → reads or generates X-Request-Id, MDC.put(), logs method + path
+3. AuthFilter          → validates JWT, extracts userId/email/role, sets SecurityContext
+4. SecurityConfig      → permits /auth/**, /actuator/health; secures everything else
+5. ChatController      → routes to handler; @Valid on createChat only (updateChat has no constraints)
+6. ChatService         → BOLA ownership check, business logic, TX split
+7. ChatRepository      → JPA query, pagination, index-backed retrieval
+8. LLMClient           → forwards requestId + identity headers to Flask :5001
+9. LoggingFilter       → logs completion with method, path, and status code
 ```
-
-#### 1. Controllers Layer (HTTP/REST API)
-**Purpose**: Handle HTTP requests/responses, request validation, and response formatting
-- **Responsibilities**:
-  - Route HTTP requests to appropriate handlers
-  - Validate request bodies using Bean Validation (`@Valid`)
-  - Extract authentication context from request attributes
-  - Format responses with appropriate HTTP status codes
-  - Handle pagination and sorting parameters
-
-**Key Components**:
-- `ChatController.java`: Main REST controller with CRUD endpoints
-- Request/Response DTOs for data transfer
-- Proper HTTP method usage (GET, POST, PUT, DELETE, PATCH)
-
-#### 2. Services Layer (Business Logic)
-**Purpose**: Implement business rules and orchestrate complex operations
-- **Responsibilities**:
-  - Coordinate between repositories and external services
-  - Implement business workflows (e.g., create chat → call LLM → persist response)
-  - Handle transactions for data consistency
-  - Transform data between layers
-  - Integrate with external services (LLM client)
-
-**Key Components**:
-- `ChatService.java`: Core business logic for chat operations
-- `LLMClient.java`: Integration with GenAI service
-- Transaction management with `@Transactional`
-
-#### 3. Repositories Layer (Data Access)
-**Purpose**: Abstract database operations and provide type-safe data access
-- **Responsibilities**:
-  - Execute database queries and updates
-  - Implement custom query methods using JPA Criteria API
-  - Handle pagination and sorting
-  - Manage entity relationships and lazy loading
-
-**Key Components**:
-- `ChatRepository.java`: Chat message data access
-- `UserRepository.java`: User data access
-- `ChatSpecifications.java`: Dynamic query specifications
-
-#### 4. Models Layer (Domain Entities)
-**Purpose**: Represent database tables and business domain objects
-- **Responsibilities**:
-  - Define database schema through JPA annotations
-  - Establish entity relationships
-  - Handle data validation and constraints
-
-**Key Components**:
-- `ChatMessage.java`: Chat message entity
-- `User.java`: User entity
-- Proper JPA mappings and relationships
-
-### Cross-Cutting Concerns
-- **Configuration**: Centralized configuration classes
-- **Security**: Authentication filters and CORS configuration
-- **Exception Handling**: Global exception handler for consistent error responses
-- **Logging**: Structured logging with request tracing
-- **Validation**: Input validation using Bean Validation
-
-## REST API Design
-
-### Resource Modeling
-The API follows REST principles with proper resource identification and manipulation:
-
+ 
+---
+ 
+## Authentication Flow
+ 
+### Login
 ```
-Resource: /api/chats
-├── GET    /api/chats           → List user's chats (paginated)
-├── GET    /api/chats/{id}      → Get specific chat
-├── POST   /api/chats           → Create new chat
-├── PUT    /api/chats/{id}      → Full update chat
-├── PATCH  /api/chats/{id}      → Partial update chat
-└── DELETE /api/chats/{id}      → Delete specific chat
-    DELETE /api/chats?userId=X  → Delete all user's chats
+POST /auth/login  {email, password}
+  → AuthService.login()
+  → UserRepository.findByEmail()
+  → BCryptPasswordEncoder.matches(rawPassword, storedHash)
+  → JWT generated with userId, email, role claims (HS256, 15 min expiry)
+  → Refresh token: random UUID stored as SHA-256 hash in refresh_tokens table
+  → Response: { accessToken: "..." }
+  → Cookie: refreshToken=<token>; HttpOnly; Secure; SameSite=Strict; Path=/auth
 ```
-
-### HTTP Methods & Status Codes
-- **GET**: Safe, idempotent, cacheable
-- **POST**: Create resources, returns 201 Created
-- **PUT**: Full updates, idempotent, returns 200 OK
-- **PATCH**: Partial updates, returns 200 OK
-- **DELETE**: Remove resources, returns 204 No Content
-
-### Request/Response Patterns
-- **Consistent JSON Structure**: All responses follow consistent patterns
-- **Error Responses**: Structured error objects with status, message, and request ID
-- **Pagination**: Spring Data Page objects for large result sets
-- **Filtering**: Query parameters for user-specific data
-- **Sorting**: Configurable sort fields and directions
-
-### Authentication & Authorization
-- **Bearer Token Authentication**: `Authorization: Bearer <token>` header
-- **Stateless Design**: No server-side sessions
-- **Request Filters**: Pre-processing authentication before controller execution
-
+ 
+### Request Authentication
+```
+GET /api/chats  Authorization: Bearer <jwt>
+  → AuthFilter.doFilterInternal()
+  → JWT signature + expiry validated
+  → Claims extracted: userId, email, role
+  → SecurityContextHolder populated
+  → request.setAttribute("userId", userId)
+  → request.setAttribute("role", role)
+  → request.setAttribute("requestId", requestId)
+  → Controller reads identity from these attributes — never from request body
+```
+ 
+### Refresh
+```
+POST /auth/refresh  (sends HttpOnly cookie automatically)
+  → SHA-256 hash of cookie value
+  → RefreshToken entity looked up by token hash
+  → Expiry checked
+  → New access token + new refresh token generated
+  → Old refresh token deleted (rotation)
+  → New pair returned
+```
+ 
+**Why hash the refresh token?**
+If the database is leaked, the attacker gets SHA-256 hashes, not usable tokens. Refresh tokens are high-entropy random UUIDs so SHA-256 without salt is acceptable here — unlike passwords which need BCrypt's adaptive cost factor.
+ 
+**Why HttpOnly cookie for refresh token?**
+localStorage is readable by JavaScript. An XSS attack can steal tokens from localStorage. HttpOnly cookies are invisible to JS. The `SameSite=Strict` flag mitigates CSRF. `allowCredentials(true)` in CorsConfig is required for the browser to send the cookie cross-origin.
+ 
+---
+ 
+## Authorization — BOLA Prevention
+ 
+Broken Object Level Authorization (BOLA/IDOR): a user accesses another user's resource by guessing IDs.
+ 
+**Where the check lives:** `ChatService.java` — not the controller.
+ 
+```java
+// ChatService.java — every read, update, and delete operation includes this check
+ChatMessage chat = chatRepository.findById(chatId)
+    .orElseThrow(() -> new ResourceNotFoundException("Chat not found"));
+ 
+if (!chat.getUser().getId().equals(jwtUserId)) {
+    throw new ForbiddenException("Access denied");
+}
+```
+ 
+**Why `chat.getUser().getId()` and not `chat.getUserId()`?**
+The `ChatMessage` entity holds a `@ManyToOne User user` relationship. The user ID is accessed via the relationship object, not a denormalized field. This follows the JPA entity model where relationships are navigated, not bypassed.
+ 
+**Why service layer, not controller?**
+If a new endpoint is added tomorrow and the developer forgets to add an authorization check to the controller, the service-layer check still protects the data. Business rules belong in the service.
+ 
+**Admin override:** Admin role can delete any chat, but that override is implemented separately in `deleteChat(...)`. The shared ownership helper itself checks only ownership.
+ 
+---
+ 
 ## Database Design
-
-### Schema Overview
-
-The database follows relational design principles with proper normalization and strategic denormalization:
-
+ 
+### Schema
+ 
 ```sql
--- Users table (Strong Entity)
 CREATE TABLE users (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    email VARCHAR(255) NOT NULL UNIQUE,
-    name VARCHAR(255) NOT NULL
+    id       BIGINT PRIMARY KEY AUTO_INCREMENT,
+    email    VARCHAR(255) NOT NULL UNIQUE,
+    name     VARCHAR(255) NOT NULL,
+    password VARCHAR(255) NOT NULL,  -- BCrypt hash, never plain text
+    role     VARCHAR(50)  NOT NULL   -- e.g. USER, ADMIN
 );
-
--- Chat messages table (Weak Entity with Foreign Key)
+ 
+CREATE TABLE refresh_tokens (
+    id         BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id    BIGINT NOT NULL REFERENCES users(id),
+    token_hash VARCHAR(255) NOT NULL,  -- SHA-256 of actual token
+    expires_at TIMESTAMP NOT NULL
+);
+ 
 CREATE TABLE chat_messages (
-    id BIGINT PRIMARY KEY AUTO_INCREMENT,
-    user_id BIGINT NOT NULL,
-    prompt TEXT NOT NULL,
-    response TEXT,
-    user_name VARCHAR(255),  -- Denormalized for performance
+    id        BIGINT PRIMARY KEY AUTO_INCREMENT,
+    user_id   BIGINT NOT NULL REFERENCES users(id),
+    prompt    TEXT NOT NULL,
+    response  TEXT,
     created_at TIMESTAMP NOT NULL,
-    updated_at TIMESTAMP,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    user_name VARCHAR(255)   -- denormalized for read performance
 );
-
--- Composite index for efficient queries
+ 
+-- Composite index used by the entity mapping
 CREATE INDEX idx_user_created_desc ON chat_messages(user_id, created_at DESC);
 ```
-
-### Entity Relationships
-- **One-to-Many**: User → ChatMessages (bidirectional)
-- **Foreign Key Constraints**: Enforce referential integrity
-- **Cascade Operations**: Proper cascade settings for data consistency
-
+ 
+> **Note:** The current entity includes `created_at` via `createdAt`, but does not currently include a separate `updated_at` field or Spring Data auditing annotations.
+ 
 ### Design Decisions
+ 
+**Normalization (3NF):** Users and chat_messages are separate tables. No redundancy — user data stored once, referenced by foreign key.
+ 
+**Strategic denormalization:** `user_name` is stored in `chat_messages` to avoid a JOIN on every chat history display. Chat history is read far more than written. This is a deliberate trade-off.
+ 
+**Why split transactions around the LLM call?**
+ 
+```
+TX1: INSERT INTO chat_messages (prompt) → COMMIT   // DB connection released
+     [LLM call — 2 to 10 seconds]
+TX2: UPDATE chat_messages SET response = ? → COMMIT  // DB connection acquired again
+```
+ 
+Holding an open DB transaction during the LLM call would occupy a HikariCP connection for the full duration. With a pool of 50 connections and LLM calls averaging 5 seconds, throughput collapses under moderate load. The split keeps each transaction under 10ms.
+ 
+**Risk:** if the LLM call fails between TX1 and TX2, the chat has a prompt with no response. Mitigation: retry at HTTP level or add a `status` column (`PENDING`/`COMPLETE`/`FAILED`).
+ 
+---
+ 
+## REST API
 
-#### Normalization (3NF)
-- **Separate Tables**: Users and chat_messages are properly separated
-- **No Redundancy**: User data stored once, referenced by foreign key
-- **Functional Dependencies**: All non-key attributes depend only on the primary key
+```
+GET    /api/chats          → paginated chat history for authenticated user
+GET    /api/chats/{id}     → single chat (ownership check)
+POST   /api/chats          → create chat — accepts {prompt} only; userId from JWT
+PUT    /api/chats/{id}     → full update (ownership check)
+DELETE /api/chats/{id}     → delete by ID (ownership check, admin override)
+DELETE /api/chats          → delete all chats for authenticated user
+ 
+POST   /auth/login         → authenticate, receive access token + refresh cookie
+POST   /auth/refresh       → rotate refresh token, receive new access token
+POST   /auth/logout        → clear refresh cookie, revoke DB token
+ 
+GET    /actuator/health    → {status: UP}
+```
+ 
+**Why does `CreateChatRequest` not include `userId`?**
+The client must never supply their own identity. `userId` comes from the validated JWT claim set by `AuthFilter`. Accepting `userId` from the request body would allow any user to claim any identity.
+ 
+**Status codes:**
+- `POST /api/chats` → `201 Created`
+- `DELETE` → `204 No Content`
+- `GET` / `PUT` → `200 OK`
+- Invalid auth → `401 Unauthorized`
+- Ownership failure → `403 Forbidden`
+- Missing resource → `404 Not Found`
+- Validation failure → `400 Bad Request` with field-level errors
 
-#### Strategic Denormalization
-- **user_name in chat_messages**: Avoids JOIN for chat history display
-- **Performance Optimization**: O(1) access for frequently displayed data
-- **Read-Heavy Workload**: Chat history is read much more than written
+### Example Requests And Responses
 
-#### Indexing Strategy
-- **Primary Keys**: Auto-increment BIGINT for scalability
-- **Composite Index**: `(user_id, created_at DESC)` for efficient pagination
-- **Foreign Key Index**: Automatic indexing on user_id
+#### `POST /auth/login`
 
-### ACID Transactions
+Request:
+```bash
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"user@example.com","password":"password"}'
+```
 
-- **Atomicity**: "Save prompt (TX1) → Call LLM → Save response (TX2)"
-- **Consistency**: Foreign key and NOT NULL constraints enforced
-- **Isolation**: READ_COMMITTED prevents dirty reads
-- **Durability**: WAL (Write-Ahead Logging) ensures persistence
+Response body:
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+}
+```
 
-## Technology Stack
+Response headers include:
+```text
+Set-Cookie: refresh_token=<uuid>; Path=/auth; HttpOnly; Secure; SameSite=Strict
+```
 
-- **Framework**: Spring Boot 3.2.0
-- **Language**: Java 17
-- **Database**: H2 (development) / PostgreSQL (production)
-- **ORM**: Hibernate/JPA with Spring Data JPA
-- **Security**: Spring Security
-- **Validation**: Jakarta Bean Validation
-- **Web**: Spring Web MVC
-- **Logging**: Logback with Logstash JSON encoder
-- **Build**: Maven
-- **Testing**: JUnit 5, Spring Boot Test
+#### `POST /auth/refresh`
 
+Request:
+```bash
+curl -X POST http://localhost:8080/auth/refresh \
+  -H "Cookie: refresh_token=<refresh_token>"
+```
+
+Response body:
+```json
+{
+  "accessToken": "eyJhbGciOiJIUzI1NiJ9..."
+}
+```
+
+#### `POST /api/chats`
+
+Request:
+```bash
+curl -X POST http://localhost:8080/api/chats \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"prompt":"Check eligibility for employee 123"}'
+```
+
+Response:
+```json
+{
+  "id": 1,
+  "prompt": "Check eligibility for employee 123",
+  "response": "{response={execution_id=..., status=failed, error=Unauthorized access, retry_count=0, trace_id=...}}",
+  "createdAt": "2026-03-16T16:00:00",
+  "userName": "User"
+}
+```
+
+> **Note:** `ChatMessage.response` currently stores the GenAI service payload as a stringified object, not a strongly typed nested JSON structure.
+
+#### `GET /api/chats`
+
+Request:
+```bash
+curl -X GET "http://localhost:8080/api/chats?page=0&size=10&sortBy=createdAt&direction=DESC" \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Response:
+```json
+{
+  "content": [
+    {
+      "id": 1,
+      "prompt": "Check eligibility for employee 123",
+      "response": "{response={execution_id=..., status=failed, error=Unauthorized access, retry_count=0, trace_id=...}}",
+      "createdAt": "2026-03-16T16:00:00",
+      "userName": "User"
+    }
+  ],
+  "pageable": {
+    "pageNumber": 0,
+    "pageSize": 10
+  },
+  "totalElements": 1,
+  "totalPages": 1
+}
+```
+
+#### `PUT /api/chats/{id}`
+
+Request:
+```bash
+curl -X PUT http://localhost:8080/api/chats/1 \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <access_token>" \
+  -d '{"prompt":"Updated prompt","response":"Updated response"}'
+```
+
+Response:
+```json
+{
+  "id": 1,
+  "prompt": "Updated prompt",
+  "response": "Updated response",
+  "createdAt": "2026-03-16T16:00:00",
+  "userName": "User"
+}
+```
+
+#### `DELETE /api/chats/{id}`
+
+Request:
+```bash
+curl -X DELETE http://localhost:8080/api/chats/1 \
+  -H "Authorization: Bearer <access_token>"
+```
+
+Response:
+```text
+204 No Content
+```
+
+---
+
+## Request Tracing
+ 
+```java
+// LoggingFilter.java
+String requestId = Optional.ofNullable(request.getHeader("X-Request-Id"))
+    .orElseGet(() -> UUID.randomUUID().toString());
+ 
+MDC.put("requestId", requestId);
+response.setHeader("X-Request-Id", requestId);
+ 
+// logs method, URI, and status — duration tracking not yet implemented
+try {
+    filterChain.doFilter(request, response);
+    log.info("Completed {} {} status={}", method, uri, status);
+} finally {
+    MDC.clear();
+}
+```
+ 
+`LLMClient` forwards the same ID to Flask:
+```java
+headers.set("X-Request-Id", requestId);
+headers.set("X-User-Id",    String.valueOf(userId));
+headers.set("X-User-Email", email);
+headers.set("X-User-Role",  role);
+```
+ 
+Result: one `requestId` lets you grep logs across both services to trace any request end-to-end.
+ 
+> **Current gap:** `LoggingFilter` logs method, path, and status but does not measure request duration. To add: capture `startTime = System.currentTimeMillis()` before `filterChain.doFilter()` and log `elapsed = System.currentTimeMillis() - startTime` after.
+ 
+---
+ 
+## Exception Handling
+ 
+```java
+// GlobalExceptionHandler.java
+UnauthorizedException           → 401  { timestamp, status: 401, error, message, requestId }
+ForbiddenException              → 403  { timestamp, status: 403, error, message, requestId }
+ResourceNotFoundException       → 404  { timestamp, status: 404, error, message, requestId }
+MethodArgumentNotValidException → 400  { timestamp, status: 400, error, message: "<combined field errors>", requestId }
+Exception                       → 500  { timestamp, status: 500, error, message: "Internal error", requestId }
+```
+ 
+> **Note:** `MethodArgumentNotValidException` returns a single `message` string containing the validation errors — not a structured `errors: [{field, message}]` array. `UpdateChatRequest` also has no bean-validation constraints, so `@Valid` on update operations would have no effect; only `createChat` uses `@Valid` with validated fields.
+ 
+---
+ 
 ## Configuration
-
-### Application Configuration (`application.yml`)
+ 
 ```yaml
+# application.yml (key settings)
+jwt:
+  secret: ${JWT_SECRET}              # from environment variable — never hardcoded
+  access-token-expiry-ms: 900000     # 15 minutes
+ 
+spring:
+  task:
+    execution:
+      pool:
+        core-size: 10       # configured for @Async — LLM calls currently synchronous
+        max-size: 50        # burst capacity
+        queue-capacity: 100 # then CallerRunsPolicy
+ 
+  jpa:
+    hibernate:
+      ddl-auto: update      # dev only — use Flyway in production
+ 
+openai:
+  service-url: http://localhost:5001
+ 
 cors:
   allowed-origins:
     - http://localhost:3000
     - https://frontend.com
-
-openai:
-  service-url: http://localhost:5001
-
-spring:
-  datasource:
-    url: jdbc:h2:mem:testdb
-    driver-class-name: org.h2.Driver
-    username: sa
-    password: ""
-
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: true
-
-  task:
-    execution:
-      pool:
-        core-size: 10
-        max-size: 50
-        queue-capacity: 100
-        thread-name-prefix: llm-async-
 ```
-
-### Key Configuration Classes
-- `CorsConfig.java`: CORS policy configuration
-- `SecurityConfig.java`: Spring Security setup (CSRF disabled, stateless)
-- `RestConfig.java`: REST template and web configuration
-- `AsyncConfig.java`: Async thread pool for LLM calls
-- `LogbackInitializer.java`: Structured logging setup
-
-## Request Processing Flow
-
-Every API request follows a production-grade pipeline:
-
-1. **Client Request** → HTTP request with `Authorization: Bearer <token>`
-2. **CORS Handling** → Preflight requests and origin validation
-3. **Filter Chain** → LoggingFilter → AuthFilter (authentication & authorization)
-4. **Controller** → Route to handler, validate input, call service
-5. **Service** → Business logic, transaction management, external calls
-6. **Repository** → Database operations with proper isolation
-7. **Response** → Formatted JSON with appropriate HTTP status
-8. **Cleanup** → MDC cleanup, response logging
-
-## Setup & Run
-
-### Prerequisites
-- Java 17 or higher
-- Maven 3.8 or higher
-
-### Running Locally
+ 
+---
+ 
+## Key Files
+ 
+| File | Pattern | Purpose |
+|---|---|---|
+| `AuthFilter.java` | Servlet filter | JWT validation, SecurityContext population. Whitelists `/auth/**` and `/actuator/health`. |
+| `SecurityConfig.java` | Spring Security | HttpSecurity chain. Permits public routes, adds AuthFilter, provides BCryptPasswordEncoder bean. |
+| `AuthService.java` | Service | Login: BCrypt verify → JWT generate → refresh token hash + store. Refresh: lookup by hash → validate expiry → rotate. |
+| `ChatService.java` | Service | BOLA check via `chat.getUser().getId()`. TX1/TX2 split. Forwards identity headers to LLMClient. |
+| `ChatRepository.java` | Spring Data JPA | `findByUserId(Long, Pageable)`. `deleteByUserId(Long)` for bulk delete. |
+| `LoggingFilter.java` | Servlet filter | MDC requestId. Logs method + path on start. Logs method + path + status on completion. No duration yet. |
+| `GlobalExceptionHandler.java` | @ControllerAdvice | Maps exception types to HTTP status codes. Never leaks stack traces. |
+| `CorsConfig.java` | Configuration | `allowCredentials(true)` for HttpOnly cookie. Exposes `X-Request-Id` response header. |
+| `AsyncConfig.java` | Configuration | ThreadPoolTaskExecutor: core=10, max=50, queue=100. Configured for future `@Async` use — LLM calls in `ChatService` are currently synchronous. |
+| `LLMClient.java` | HTTP client | Forwards `X-Request-Id`, `X-User-Id`, `X-User-Email`, `X-User-Role` to Flask. |
+ 
+---
+ 
+## Known Gaps
+ 
+| Gap | Next Step |
+|---|---|
+| No registration endpoint | Add `POST /auth/register` — users currently must be seeded directly into the DB |
+| No automated tests | JUnit 5 + Mockito for ChatService unit tests. `@SpringBootTest` for auth flow. |
+| LoggingFilter does not measure duration | Add `startTime` capture before filter chain, log elapsed ms after |
+| `ddl-auto: update` in config | Replace with Flyway migrations before production |
+| No PATCH endpoint | `PUT /api/chats/{id}` handles full update; partial update not yet implemented |
+ 
+---
+ 
+## Running Locally
+ 
 ```bash
 cd backend-service
 mvn clean spring-boot:run
+# Service starts on http://localhost:8080
 ```
-
-### Building for Production
+ 
 ```bash
 mvn clean package
 java -jar target/backend-service-0.0.1-SNAPSHOT.jar
 ```
-
-## API Endpoints
-
-### 1. Create Chat Message
-**POST** `/api/chats`
-```bash
-curl -X POST http://localhost:8080/api/chats \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer test-token" \
-  -d '{"userId": "user123", "prompt": "What is AI?"}'
-```
-
-### 2. Get All Chats for User
-**GET** `/api/chats?userId=user123&page=0&size=10&sortBy=createdAt&direction=DESC`
-```bash
-curl -X GET "http://localhost:8080/api/chats?userId=user123" \
-  -H "Authorization: Bearer test-token"
-```
-
-### 3. Get Chat by ID
-**GET** `/api/chats/{id}`
-```bash
-curl -X GET http://localhost:8080/api/chats/1 \
-  -H "Authorization: Bearer test-token"
-```
-
-### 4. Update Chat (Full Update)
-**PUT** `/api/chats/{id}`
-```bash
-curl -X PUT http://localhost:8080/api/chats/1 \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer test-token" \
-  -d '{"prompt": "Updated prompt", "response": "Updated response"}'
-```
-
-### 5. Partial Update Chat
-**PATCH** `/api/chats/{id}`
-```bash
-curl -X PATCH http://localhost:8080/api/chats/1 \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer test-token" \
-  -d '{"response": "Updated response only"}'
-```
-
-### 6. Delete Chat by ID
-**DELETE** `/api/chats/{id}`
-```bash
-curl -X DELETE http://localhost:8080/api/chats/1 \
-  -H "Authorization: Bearer test-token"
-```
-
-### 7. Delete All Chats for User
-**DELETE** `/api/chats?userId=user123`
-```bash
-curl -X DELETE "http://localhost:8080/api/chats?userId=user123" \
-  -H "Authorization: Bearer test-token"
-```
-
-## Error Handling
-
-### Global Exception Handler
-The `GlobalExceptionHandler.java` provides centralized error handling:
-
-- **400 Bad Request**: Validation errors, malformed requests
-- **401 Unauthorized**: Missing or invalid authentication
-- **404 Not Found**: Resource not found
-- **500 Internal Server Error**: Unexpected server errors
-
-### Error Response Format
-```json
-{
-  "timestamp": "2026-02-09T10:30:45.123456Z",
-  "status": 400,
-  "error": "Bad Request",
-  "message": "Validation failed",
-  "requestId": "uuid-123"
-}
-```
-
-## Monitoring & Observability
-
-### Structured Logging
-- **Request Tracing**: Unique `requestId` for tracking requests
-- **JSON Format**: Logstash encoder for log aggregation
-- **Log Levels**: Configurable logging levels
-- **Performance Metrics**: Request duration and status codes
-
-### Health Checks
-- **Spring Boot Actuator**: `/actuator/health` endpoint
-- **Database Connectivity**: Automatic health checks
-- **Custom Metrics**: Application-specific metrics
-
-## Development Best Practices
-
-### Code Organization
-- **Package Structure**: Clear separation by layer
-- **Dependency Injection**: Constructor injection preferred
-- **SOLID Principles**: Single responsibility, open/closed, etc.
-- **DRY Principle**: Avoid code duplication
-
-### Testing Strategy
-- **Unit Tests**: Service and repository layer testing
-- **Integration Tests**: Full API testing with TestRestTemplate
-- **Test Slices**: Focused testing with `@WebMvcTest`, `@DataJpaTest`
-
-### Performance Considerations
-- **Connection Pooling**: HikariCP for database connections
-- **Async Processing**: Thread pools for external service calls
-- **Pagination**: Efficient data retrieval for large datasets
-- **Indexing**: Proper database indexing for query performance
-
-This backend service demonstrates production-ready implementation of layered architecture, REST API design, and database design principles suitable for enterprise applications.
-

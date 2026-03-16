@@ -1,36 +1,28 @@
-from repositories.chat_repository import ChatRepository
-from repositories.vector_repository import search_context
-from typing import Dict, Any
+from typing import Any, Dict
+import uuid
 
 from agentic_mcp.graph import build_graph
+from repositories.chat_repository import ChatRepository
 
-import uuid
 
 class LLMService:
     def __init__(self):
         self.chat_repo = ChatRepository()
         self.graph = build_graph()
 
-    def process_query(self, user_id: str, prompt: str) -> Dict[str, Any]:
-        """Process user query using the LangGraph workflow, then save to repository."""
-        initial_state = { 
-            "execution_id": str(uuid.uuid4()), 
-            "trace_id": str(uuid.uuid4()), 
-            "role": "admin", 
-            "query": prompt, 
-            "retry_count": 0 
+    def process_query(self, user_id: str, role: str, prompt: str, request_id: str) -> Dict[str, Any]:
+        initial_state = {
+            "execution_id": str(uuid.uuid4()),
+            "trace_id": request_id,
+            "role": role.lower(),
+            "query": prompt,
+            "retry_count": 0,
         }
 
         result_state = self.graph.invoke(initial_state)
-
         response_obj = result_state.get("response")
+        response_text = response_obj if isinstance(response_obj, str) else str(response_obj)
 
-        # create a string representation for storage
-        response_text = (
-            response_obj if isinstance(response_obj, str) else str(response_obj)
-        )
-
-        # Save prompt and response to repository
         chat_entry = self.chat_repo.save_chat(user_id, prompt, response_text)
 
         return {
@@ -39,6 +31,7 @@ class LLMService:
             "prompt": prompt,
             "response": response_obj,
             "created_at": chat_entry["created_at"],
+            "trace_id": request_id,
         }
 
     def get_user_chats(self, user_id: str) -> list:
@@ -57,9 +50,8 @@ class LLMService:
         return self.chat_repo.delete_by_user_id(user_id)
 
 
-# export a simple function used by the Flask handler
 _singleton = LLMService()
 
 
 def infer_service(prompt: str, user_id: str):
-    return _singleton.process_query(user_id, prompt)
+    return _singleton.process_query(user_id, "USER", prompt, str(uuid.uuid4()))
